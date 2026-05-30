@@ -54,6 +54,48 @@ describe('calculateStreak', () => {
     expect(result.totalContributions).toBe(0);
   });
 
+  it('handles a massive single-day commit spike without affecting streak calculations', () => {
+    const calendar = buildCalendar([
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1, // Week 1
+
+      0,
+      0,
+      125,
+      0,
+      0,
+      0,
+      0, // Week 2 — huge spike
+
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0, // Week 3
+
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1, // Week 4 — active streak ending today
+    ]);
+
+    const result = calculateStreak(calendar);
+
+    expect(result.currentStreak).toBe(7);
+    expect(result.longestStreak).toBe(7);
+    expect(result.totalContributions).toBe(141);
+  });
+
   it('counts an active streak when the last day has contributions', () => {
     // The last element represents "today" — committing today keeps the streak alive.
     const calendar = buildCalendar([
