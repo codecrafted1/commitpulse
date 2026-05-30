@@ -54,6 +54,28 @@ describe('calculateStreak', () => {
     expect(result.totalContributions).toBe(0);
   });
 
+  it('handles multiple weeks of zero contributions separating active streaks', () => {
+    const calendar = buildCalendar([
+      // Week 1 - active streak
+      1, 1, 1, 1, 1, 1, 1,
+
+      // Week 2 - gap
+      0, 0, 0, 0, 0, 0, 0,
+
+      // Week 3 - gap
+      0, 0, 0, 0, 0, 0, 0,
+
+      // Week 4 - new streak
+      1, 1, 1, 1, 1, 1, 1,
+    ]);
+
+    const result = calculateStreak(calendar);
+
+    expect(result.currentStreak).toBe(7);
+    expect(result.longestStreak).toBe(7);
+    expect(result.totalContributions).toBe(14);
+  });
+
   it('counts an active streak when the last day has contributions', () => {
     // The last element represents "today" — committing today keeps the streak alive.
     const calendar = buildCalendar([
