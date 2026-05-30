@@ -1355,4 +1355,53 @@ describe('Radar Scan Line Animation Alignment', () => {
     expect(svg).toContain('width="600"');
     expect(svg).toContain('height="420"');
   });
+
+  it('safely truncates usernames longer than 30 chars with trailing dots without changing CSS geometry', () => {
+    // 1. Arrange: Create usernames (one short baseline, one strictly > 30 chars)
+    const shortUsername = 'avi';
+    const longUsername = 'ThisIsAVeryLongUsernameThatExceedsThirtyCharacters';
+    const expectedTruncated = longUsername.slice(0, 12) + '...';
+
+    const paramsBaseline = {
+      user: shortUsername,
+      size: 'medium',
+      autoTheme: false,
+    } as unknown as BadgeParams;
+    const paramsLong = {
+      user: longUsername,
+      size: 'medium',
+      autoTheme: false,
+    } as unknown as BadgeParams;
+
+    // 2. Act: Truncate username and generate SVGs
+    const truncatedName = truncateUsername(longUsername);
+    const svgBaseline = generateSVG(mockStats, paramsBaseline, mockCalendar);
+    const svgLong = generateSVG(mockStats, paramsLong, mockCalendar);
+
+    // Helper to extract critical SVG geometry attributes
+    const extractGeometry = (svgStr: string) => {
+      const width = svgStr.match(/width="([^"]*)"/)?.[1];
+      const height = svgStr.match(/height="([^"]*)"/)?.[1];
+      const viewBox = svgStr.match(/viewBox="([^"]*)"/)?.[1];
+      return { width, height, viewBox };
+    };
+
+    // 3. Assertions:
+
+    // A. Verify exact expected truncation value on the helper utility
+    expect(truncatedName).toBe(expectedTruncated);
+
+    // B. Verify the visible <text class="title"> tag contains exactly the truncated name and NOT the full username
+    const textTitleMatch = svgLong.match(/<text[^>]*class="title"[^>]*>([^<]*)<\/text>/);
+    expect(textTitleMatch).not.toBeNull();
+    const renderedTitleText = textTitleMatch?.[1];
+
+    expect(renderedTitleText).toBe(expectedTruncated.toUpperCase());
+    expect(renderedTitleText).not.toContain(longUsername.toUpperCase());
+
+    // C. Verify geometry remains completely unchanged compared to the baseline
+    const geometryBaseline = extractGeometry(svgBaseline);
+    const geometryLong = extractGeometry(svgLong);
+    expect(geometryLong).toEqual(geometryBaseline);
+  });
 });
