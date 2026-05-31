@@ -403,11 +403,7 @@ describe('TTLCache', () => {
       cache.destroy();
     });
 
-<<<<<<< HEAD
     it('stores and retrieves multidimensional array values', () => {
-=======
-    it('preserves complex multidimensional array values', () => {
->>>>>>> dd44a81 (test(cache): verify multidimensional array values)
       const cache = new TTLCache<number[][]>();
 
       const matrix = [
