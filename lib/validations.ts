@@ -1,5 +1,8 @@
 // lib/validations.ts
+<<<<<<< HEAD
 import { supportedLanguages } from './i18n/badgeLabels';
+=======
+>>>>>>> 39f3891 (test(validation): add invalid timezone boundary checks)
 import { z } from 'zod';
 import {
   isValidHex,
