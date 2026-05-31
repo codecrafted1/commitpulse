@@ -281,6 +281,7 @@ const baseStreakParamsSchema = z.object({
     .transform((val) => val === 'true' || val === '1'),
   // Glow effect — on by default. Accepts 'true'/'1' (true) or 'false' (false).
   glow: z.string().optional().transform(toBooleanFlag).default(true),
+  opacity: z.string().optional().transform(toOpacityValue),
   entrance: z.enum(['rise', 'fade', 'slide', 'none']).catch('rise').default('rise'),
 
   // Output format: 'svg' (default) or 'json' for programmatic access.
