@@ -727,6 +727,20 @@ describe('streakParamsSchema — accent parameter HEX color validation', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects the invalid boundary hex color "#ZZZZZZ" for accent', () => {
+    const result = streakParamsSchema.safeParse({
+      user: 'octocat',
+      accent: '#ZZZZZZ',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toContain(
+        'accent must be a valid 3 or 6 character hex color without #'
+      );
+    }
+  });
+
   it('accepts a valid 6-character hex color for accent', () => {
     const result = streakParamsSchema.safeParse({
       user: 'octocat',
