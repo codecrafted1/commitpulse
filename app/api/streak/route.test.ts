@@ -103,6 +103,18 @@ describe('GET /api/streak', () => {
   });
 
   describe('parameter validation', () => {
+    it('returns 400 when grace=-1 is provided', async () => {
+      const response = await GET(
+        makeRequest({
+          user: 'octocat',
+          grace: '-1',
+        })
+      );
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body.details.fieldErrors.grace[0]).toBe('grace must be an integer between 0 and 7');
+    });
+
     it('returns 400 Bad Request when ?layout= is set to an unsupported format', async () => {
       const response = await GET(
         makeRequest({
@@ -305,7 +317,7 @@ describe('GET /api/streak', () => {
       expect(fetchGitHubContributions).toHaveBeenCalled();
     });
 
-    it('returns valid SVG when grace exceeds max value', async () => {
+    it('returns 400 when grace exceeds max value', async () => {
       const response = await GET(
         makeRequest({
           user: 'octocat',
@@ -313,10 +325,7 @@ describe('GET /api/streak', () => {
         })
       );
 
-      expect(response.status).toBe(200);
-
-      const body = await response.text();
-      expect(body).toContain('<svg');
+      expect(response.status).toBe(400);
     });
 
     it('embeds the username (uppercased) in the SVG title', async () => {

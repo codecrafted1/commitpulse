@@ -10,28 +10,29 @@ describe('streakParamsSchema — grace fallback behavior', () => {
     expect(parse({ grace: '7' }).grace).toBe(7);
   });
 
-  it('clamps "8" to 7', () => {
-    expect(parse({ grace: '8' }).grace).toBe(7);
+  it('rejects "8" as out-of-range', () => {
+    const result = streakParamsSchema.safeParse({ user: 'octocat', grace: '8' });
+    expect(result.success).toBe(false);
   });
 
-  it('clamps "-1" to 0', () => {
-    expect(parse({ grace: '-1' }).grace).toBe(0);
-  });
-
-  it('falls back or clamps a negative non-integer grace input safely', () => {
-    const result = streakParamsSchema.safeParse({
-      user: 'octocat',
-      grace: '-1.5',
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.grace).toBe(0);
+  it('rejects "-1" and returns correct error message', () => {
+    const result = streakParamsSchema.safeParse({ user: 'octocat', grace: '-1' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.grace?.[0]).toBe(
+        'grace must be an integer between 0 and 7'
+      );
     }
   });
 
-  it('falls back to 1 for non-numeric grace value', () => {
-    expect(parse({ grace: 'abc' }).grace).toBe(1);
+  it('rejects a negative non-integer grace input', () => {
+    const result = streakParamsSchema.safeParse({ user: 'octocat', grace: '-1.5' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects non-numeric grace value', () => {
+    const result = streakParamsSchema.safeParse({ user: 'octocat', grace: 'abc' });
+    expect(result.success).toBe(false);
   });
 
   it('defaults to 1 when grace is omitted', () => {
