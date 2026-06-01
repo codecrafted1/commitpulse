@@ -709,10 +709,11 @@ async function fetchReposUncached(
 export async function fetchOrgMembers(orgName: string): Promise<string[]> {
   const encodedOrgName = encodeURIComponent(orgName);
   const allMembers: string[] = [];
-  const maxPages = 4;
-  const perPage = 50;
+  const perPage = 100;
+  const maxMembers = 1000;
 
-  for (let page = 1; page <= maxPages; page++) {
+  let page = 1;
+  while (allMembers.length < maxMembers) {
     const res = await fetchWithRetry(
       `${GITHUB_REST_URL}/orgs/${encodedOrgName}/members?per_page=${perPage}&page=${page}`,
       {
@@ -726,8 +727,8 @@ export async function fetchOrgMembers(orgName: string): Promise<string[]> {
 
     allMembers.push(...members.map((m) => m.login));
 
-    // If the page returned fewer members than perPage, we've reached the end
     if (members.length < perPage) break;
+    page++;
   }
 
   return allMembers;
