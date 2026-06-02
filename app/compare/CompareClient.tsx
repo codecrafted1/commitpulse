@@ -19,6 +19,11 @@ import {
   Moon,
   Sun,
   Coffee,
+  Plus,
+  Minus,
+  Code2,
+  GitPullRequest,
+  CircleDot,
 } from 'lucide-react';
 
 /* ── types ────────────────────────────────────────────────────────────── */
@@ -45,6 +50,8 @@ interface UserStats {
   peakStreak: number;
   totalContributions: number;
   codingHabit?: string;
+  totalPRs?: number;
+  totalIssues?: number;
 }
 
 interface LanguageData {
@@ -57,6 +64,8 @@ interface ActivityData {
   date: string;
   count: number;
   intensity: 0 | 1 | 2 | 3 | 4;
+  locAdditions?: number;
+  locDeletions?: number;
 }
 
 interface CompareUserData {
@@ -498,6 +507,123 @@ function CodingHabitShowdown({ user1, user2 }: { user1: CompareUserData; user2: 
   );
 }
 
+/* ── helper: code volume showdown ─────────────────────────────────────── */
+
+function CodeVolumeShowdown({ user1, user2 }: { user1: CompareUserData; user2: CompareUserData }) {
+  const calcLoC = (activity: ActivityData[]) => {
+    let add = 0,
+      del = 0;
+    activity.forEach((d) => {
+      add += d.locAdditions || 0;
+      del += d.locDeletions || 0;
+    });
+    return { add, del, net: add - del };
+  };
+
+  const loc1 = calcLoC(user1.activity);
+  const loc2 = calcLoC(user2.activity);
+
+  const maxAdd = Math.max(loc1.add, loc2.add, 1);
+  const maxDel = Math.max(loc1.del, loc2.del, 1);
+
+  const users = [
+    { username: user1.profile.username, loc: loc1, side: 'left' as const },
+    { username: user2.profile.username, loc: loc2, side: 'right' as const },
+  ];
+
+  return (
+    <div>
+      <h2 className="text-xs text-[#A1A1AA] uppercase tracking-widest font-medium mb-4 flex items-center gap-2">
+        <Code2 size={14} className="text-violet-400" />
+        Code Volume
+      </h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {users.map(({ username, loc, side }) => (
+          <motion.div
+            key={side}
+            initial={{ opacity: 0, x: side === 'left' ? -20 : 20 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            whileHover={{ scale: 1.01 }}
+            className="relative overflow-hidden p-6 rounded-2xl bg-white dark:bg-[#0a0a0a] border border-black/10 dark:border-[rgba(255,255,255,0.08)] transition-all duration-300"
+          >
+            <h4 className="text-xs font-bold uppercase tracking-widest text-[#A1A1AA] mb-5">
+              @{username}
+            </h4>
+
+            {/* Additions Bar */}
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-500">
+                  <Plus size={12} /> Lines Added
+                </span>
+                <motion.span
+                  initial={{ opacity: 0 }}
+                  whileInView={{ opacity: 1 }}
+                  className="text-sm font-bold text-emerald-500"
+                >
+                  +{loc.add.toLocaleString()}
+                </motion.span>
+              </div>
+              <div className="w-full h-3 bg-gray-100 dark:bg-[#111] rounded-full overflow-hidden border border-black/5 dark:border-[rgba(255,255,255,0.04)]">
+                <motion.div
+                  initial={{ width: 0 }}
+                  whileInView={{ width: `${(loc.add / maxAdd) * 100}%` }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
+                  className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]"
+                />
+              </div>
+            </div>
+
+            {/* Deletions Bar */}
+            <div className="mb-5">
+              <div className="flex justify-between items-center mb-2">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-rose-500">
+                  <Minus size={12} /> Lines Deleted
+                </span>
+                <motion.span
+                  initial={{ opacity: 0 }}
+                  whileInView={{ opacity: 1 }}
+                  className="text-sm font-bold text-rose-500"
+                >
+                  -{loc.del.toLocaleString()}
+                </motion.span>
+              </div>
+              <div className="w-full h-3 bg-gray-100 dark:bg-[#111] rounded-full overflow-hidden border border-black/5 dark:border-[rgba(255,255,255,0.04)]">
+                <motion.div
+                  initial={{ width: 0 }}
+                  whileInView={{ width: `${(loc.del / maxDel) * 100}%` }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
+                  className="h-full rounded-full bg-gradient-to-r from-rose-500 to-rose-400 shadow-[0_0_10px_rgba(244,63,94,0.3)]"
+                />
+              </div>
+            </div>
+
+            {/* Net Impact */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 dark:bg-[#111] border border-black/5 dark:border-[rgba(255,255,255,0.06)]">
+              <span className="text-[9px] font-medium text-[#A1A1AA] uppercase tracking-widest">
+                Net Impact
+              </span>
+              <motion.span
+                initial={{ scale: 0 }}
+                whileInView={{ scale: 1 }}
+                viewport={{ once: true }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20, delay: 0.6 }}
+                className={`text-lg font-black tracking-tight ${loc.net >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}
+              >
+                {loc.net >= 0 ? '+' : ''}
+                {loc.net.toLocaleString()}
+              </motion.span>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ── main component ───────────────────────────────────────────────────── */
 
 export default function CompareClient() {
@@ -768,11 +894,26 @@ export default function CompareClient() {
                     valueA={d1.profile.stats.followers}
                     valueB={d2.profile.stats.followers}
                   />
+                  <StatBattle
+                    label="Pull Requests"
+                    icon={GitPullRequest}
+                    valueA={d1.stats.totalPRs || 0}
+                    valueB={d2.stats.totalPRs || 0}
+                  />
+                  <StatBattle
+                    label="Issues"
+                    icon={CircleDot}
+                    valueA={d1.stats.totalIssues || 0}
+                    valueB={d2.stats.totalIssues || 0}
+                  />
                 </div>
               </div>
 
               {/* Coding Habits Showdown */}
               <CodingHabitShowdown user1={d1} user2={d2} />
+
+              {/* Code Volume Showdown */}
+              <CodeVolumeShowdown user1={d1} user2={d2} />
 
               {/* Language Comparison */}
               <LanguageComparison
