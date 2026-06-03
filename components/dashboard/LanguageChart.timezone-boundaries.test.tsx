@@ -10,8 +10,8 @@ function normalizeCommitDate(dateString: string, timeZone: string): string {
       month: '2-digit',
       day: '2-digit',
     });
-  } catch (error) {
-    // If the timezone name is invalid, fall back gracefully to standard UTC formatting
+  } catch {
+    // Variable removed since it isn't being read, clearing the linter warning!
     return date.toLocaleDateString('en-US', {
       timeZone: 'UTC',
       year: 'numeric',
