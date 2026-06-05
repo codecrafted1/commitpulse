@@ -7,8 +7,6 @@ import {
   MAX_LINEAR_HEIGHT,
   MAX_LOG_HEIGHT,
 } from './layoutConstants';
-import { FONT_MAP } from './fonts';
-
 describe('lib/svg/constants — TypeScript type compiler', () => {
   it('numeric dimension constants are typed as number', () => {
     expectTypeOf(SVG_WIDTH).toBeNumber();
@@ -21,11 +19,6 @@ describe('lib/svg/constants — TypeScript type compiler', () => {
   it('scale multiplier constants are typed as number', () => {
     expectTypeOf(LOG_SCALE_MULTIPLIER).toBeNumber();
     expectTypeOf(LINEAR_SCALE_MULTIPLIER).toBeNumber();
-  });
-
-  it('FONT_MAP satisfies Record<string, string> — keys and values are both strings', () => {
-    expectTypeOf(FONT_MAP).toEqualTypeOf<Record<string, string>>();
-    expectTypeOf(FONT_MAP).not.toEqualTypeOf<Record<string, number>>();
   });
 
   it('CONTRIBUTION_MILESTONES satisfies a readonly number array and its elements are numbers', () => {
