@@ -6,7 +6,7 @@ import DashboardSkeleton from './DashboardSkeleton';
 import { X, RefreshCw, Share2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import type { Achievement, Repository } from '@/types/dashboard';
+import type { Achievement, Repository, HallOfFameAward } from '@/types/dashboard';
 import type { GraphNode, GraphLink } from '@/types';
 
 import RefreshButton from './RefreshButton';
@@ -20,6 +20,7 @@ import HistoricalTrendView from './HistoricalTrendView';
 import AIInsights from './AIInsights';
 import StatsCard from './StatsCard';
 import RepositoryGraph from './RepositoryGraph';
+import HallOfFame from './HallOfFame';
 import ComparisonStatsCard from './ComparisonStatsCard';
 import RadarChart from './RadarChart';
 import GrowthTrendChart from './GrowthTrendChart';
@@ -79,6 +80,7 @@ export interface DashboardData {
   };
   popularRepos?: Repository[];
   pinnedRepos?: Repository[];
+  hallOfFame?: HallOfFameAward[];
 }
 
 interface DashboardClientProps {
@@ -662,7 +664,7 @@ export default function DashboardClient({
         <PRInsightsClient username={username} />
       ) : !isCompareMode || !secondUserData || !coderProfileB ? (
         <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr_320px] gap-6 lg:gap-8">
-          <aside className="flex flex-col gap-6 lg:row-span-2">
+          <aside className="flex flex-col gap-6">
             <ProfileCard
               user={initialData.profile}
               exportData={{
@@ -728,8 +730,9 @@ export default function DashboardClient({
             />
           </aside>
 
-          <div className="col-span-1 lg:col-span-2 lg:col-start-2">
+          <div className="col-span-1 lg:col-span-3">
             <RepositoryGraph data={initialData.graphData} />
+            <HallOfFame data={initialData.hallOfFame} />
           </div>
         </div>
       ) : (
