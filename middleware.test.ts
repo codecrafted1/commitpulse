@@ -7,8 +7,6 @@ vi.mock('@/lib/rate-limit', () => ({
   rateLimit: vi.fn(),
 }));
 
-// Helper: build a rateLimit mock that returns success for the first call
-// and a given result for the second call (used when both limiters fire).
 function mockBothLimiters(
   refreshResult: Awaited<ReturnType<typeof rateLimit>>,
   generalSuccess = true
@@ -27,7 +25,6 @@ describe('middleware', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     originalEnv = process.env.TRUSTED_PROXIES;
-    // Set trusted proxies to make standard multi-hop tests pass as trusted proxy chains
     process.env.TRUSTED_PROXIES = '5.6.7.8, 9.10.11.12';
   });
 
@@ -171,7 +168,6 @@ describe('middleware', () => {
       reset: 123456789,
     });
 
-    // Clear trusted proxies so 5.6.7.8 is untrusted
     process.env.TRUSTED_PROXIES = '';
 
     const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', {
@@ -182,7 +178,6 @@ describe('middleware', () => {
 
     await middleware(request);
 
-    // Should resolve to the untrusted proxy IP (5.6.7.8) instead of the spoofed client IP (1.2.3.4)
     expect(rateLimit).toHaveBeenCalledWith('5.6.7.8', 60, 60000);
   });
 
@@ -259,28 +254,23 @@ describe('middleware', () => {
     expect(rateLimit).toHaveBeenCalledWith('1.2.3.4', 60, 60000);
   });
 
-  it('includes compare API matcher in middleware config', () => {
+  it('includes compare API matcher in proxy config', () => {
     expect(config.matcher).toContain('/api/compare/:path*');
   });
 
-  it('includes wrapped and student API matchers in middleware config', () => {
+  it('includes wrapped and student API matchers in proxy config', () => {
     expect(config.matcher).toContain('/api/wrapped/:path*');
     expect(config.matcher).toContain('/api/student/:path*');
   });
 
-  // ─── ?refresh=true rate-limit tests ───────────────────────────────────────
-
   describe('?refresh=true cache-bypass rate limit', () => {
     it('applies the refresh limiter (5 req/min) before the general limiter', async () => {
-      // Both limiters succeed
       mockBothLimiters({ success: true, limit: 5, remaining: 4, reset: 123456789 });
 
       const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
       await middleware(request);
 
-      // First call must be the refresh limiter with the prefixed key
       expect(rateLimit).toHaveBeenNthCalledWith(1, 'refresh:127.0.0.1', 5, 60000);
-      // Second call must be the general limiter with the bare IP
       expect(rateLimit).toHaveBeenNthCalledWith(2, '127.0.0.1', 60, 60000);
     });
 
@@ -306,13 +296,11 @@ describe('middleware', () => {
       const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
       const response = await middleware(request);
 
-      // The refresh limiter has limit=5, so the header must reflect that — not 60
       expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
       expect(response.status).toBe(429);
     });
 
     it('does NOT invoke the general limiter when the refresh limit is exceeded', async () => {
-      // Only the refresh limiter fires (returns fail); general limiter must not be called.
       vi.mocked(rateLimit).mockResolvedValueOnce({
         success: false,
         limit: 5,
@@ -323,7 +311,6 @@ describe('middleware', () => {
       const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
       await middleware(request);
 
-      // The general-limiter call always uses (bare IP, 60, 60000) — it must not appear.
       expect(rateLimit).not.toHaveBeenCalledWith('127.0.0.1', 60, 60000);
     });
 
@@ -353,7 +340,6 @@ describe('middleware', () => {
       const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
       await middleware(request);
 
-      // Only the general limiter should be called
       expect(rateLimit).toHaveBeenCalledTimes(1);
       expect(rateLimit).toHaveBeenCalledWith('127.0.0.1', 60, 60000);
     });
@@ -381,13 +367,11 @@ describe('middleware', () => {
       const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
       const response = await middleware(request);
 
-      // Both limiters ran and overall request succeeded
       expect(rateLimit).toHaveBeenCalledTimes(2);
       expect(response.status).toBe(200);
     });
 
     it('returns 429 from general limiter even when refresh succeeds', async () => {
-      // refresh OK, general fails
       vi.mocked(rateLimit)
         .mockResolvedValueOnce({ success: true, limit: 5, remaining: 2, reset: 123456789 })
         .mockResolvedValueOnce({ success: false, limit: 60, remaining: 0, reset: 123456789 });
@@ -397,8 +381,42 @@ describe('middleware', () => {
 
       expect(response.status).toBe(429);
       const body = await response.json();
-      // The general-limiter error body does NOT mention "refresh"
       expect(body.error).toBe('Too many requests');
     });
+  });
+});
+
+describe('middleware.ts wiring', () => {
+  it('middleware.ts exports a function named middleware', async () => {
+    const mod = await import('./middleware');
+
+    // Next.js looks for a named export called `middleware`
+    expect(typeof mod.middleware).toBe('function');
+  });
+
+  it('middleware.ts exports config with a non-empty matcher array', async () => {
+    const mod = await import('./middleware');
+
+    expect(mod.config).toBeDefined();
+    expect(Array.isArray(mod.config.matcher)).toBe(true);
+    expect(mod.config.matcher.length).toBeGreaterThan(0);
+  });
+
+  it('middleware covers all expected API routes', async () => {
+    const { config: mwConfig } = await import('./middleware');
+    const expected = [
+      '/api/streak/:path*',
+      '/api/github/:path*',
+      '/api/track-user/:path*',
+      '/api/stats/:path*',
+      '/api/og/:path*',
+      '/api/notify/:path*',
+      '/api/compare/:path*',
+      '/api/wrapped/:path*',
+      '/api/student/:path*',
+    ];
+    for (const route of expected) {
+      expect(mwConfig.matcher).toContain(route);
+    }
   });
 });

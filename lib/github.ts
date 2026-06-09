@@ -1,6 +1,7 @@
 import type {
   ContributionCalendar,
   ContributionDay,
+  ContributedRepo,
   ExtendedContributionData,
   RepoContribution,
   GraphNode,
@@ -20,6 +21,7 @@ interface GitHubRepo {
   forks_count?: number;
   updated_at?: string;
   owner?: { login: string };
+  created_at?: string;
 }
 
 const MAX_RETRIES = 3;
@@ -223,6 +225,38 @@ export async function fetchWithRetry(
   return fetchWithRetry(url, options, attempt + 1, timeoutMs);
 }
 
+const GRAPHQL_INJECTION_PATTERNS: RegExp[] = [
+  /;\s*DROP/i,
+  /;\s*DELETE/i,
+  /;\s*TRUNCATE/i,
+  /union\s+select/i,
+  /exec\s*\(/i,
+];
+
+function assertValidGraphQLBody(options: RequestInit): void {
+  if (typeof options.body !== 'string') return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(options.body);
+  } catch {
+    throw new Error('GraphQL request body is not valid JSON');
+  }
+  const query = (parsed as Record<string, unknown>)?.query;
+  if (typeof query !== 'string' || query.trim() === '') {
+    throw new Error('GraphQL request must include a non-empty query string');
+  }
+  for (const pattern of GRAPHQL_INJECTION_PATTERNS) {
+    if (pattern.test(query)) {
+      throw new Error('GraphQL query contains disallowed patterns');
+    }
+  }
+  const open = (query.match(/{/g) ?? []).length;
+  const close = (query.match(/}/g) ?? []).length;
+  if (open === 0 || open !== close) {
+    throw new Error('GraphQL query has unbalanced braces');
+  }
+}
+
 // Wraps fetchWithRetry to also retry on GraphQL-level RATE_LIMITED errors
 // that GitHub returns with HTTP 200 OK instead of 429.
 async function fetchGraphQLWithRetry(
@@ -231,6 +265,7 @@ async function fetchGraphQLWithRetry(
   attempt = 0,
   timeoutMs?: number
 ): Promise<Response> {
+  if (attempt === 0) assertValidGraphQLBody(options);
   const res = await fetchWithRetry(url, options, attempt, timeoutMs);
   if (!res.ok || attempt >= MAX_RETRIES) return res;
 
@@ -369,7 +404,7 @@ export const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000;
 export const contributionsCache = new DistributedCache<ExtendedContributionData>(1000);
 const profileCache = new DistributedCache<GitHubUserProfile>(1000);
 const reposCache = new DistributedCache<GitHubRepo[]>(500);
-const contributedReposCache = new DistributedCache<Record<string, unknown>[]>(500);
+const contributedReposCache = new DistributedCache<ContributedRepo[]>(500);
 
 interface GitHubUserProfile {
   login: string;
@@ -444,6 +479,7 @@ function sanitizeRepo(repo: GitHubRepo): GitHubRepo {
     fork: repo.fork,
     forks_count: repo.forks_count,
     updated_at: repo.updated_at,
+    created_at: repo.created_at,
   };
 }
 
@@ -612,6 +648,8 @@ async function fetchContributionsUncached(
             }
             commitContributionsByRepository(maxRepositories: 100) {
               repository {
+                name
+                nameWithOwner
                 primaryLanguage {
                   name
                 }
@@ -684,33 +722,9 @@ async function fetchContributionsUncached(
   const totalPRs = data.data.user.contributionsCollection?.totalPullRequestContributions || 0;
   const totalIssues = data.data.user.contributionsCollection?.totalIssueContributions || 0;
 
-  // Inject deterministic Lines of Code (LoC) approximation
-  calendar.weeks.forEach((week) => {
-    week.contributionDays.forEach((day) => {
-      if (day.contributionCount > 0) {
-        let hash1 = 2166136261,
-          hash2 = 2166136261;
-        const seed1 = day.date + 'add',
-          seed2 = day.date + 'del';
-        for (let i = 0; i < seed1.length; i++) {
-          hash1 ^= seed1.charCodeAt(i);
-          hash1 = Math.imul(hash1, 16777619);
-        }
-        for (let i = 0; i < seed2.length; i++) {
-          hash2 ^= seed2.charCodeAt(i);
-          hash2 = Math.imul(hash2, 16777619);
-        }
-        const randAdd = (hash1 >>> 0) / 4294967296;
-        const randDel = (hash2 >>> 0) / 4294967296;
-
-        day.locAdditions = Math.floor(day.contributionCount * (25 + randAdd * 85));
-        day.locDeletions = Math.floor(day.contributionCount * (5 + randDel * 35));
-      } else {
-        day.locAdditions = 0;
-        day.locDeletions = 0;
-      }
-    });
-  });
+  // Do not fabricate Lines of Code metrics.
+  // GitHub's contribution calendar API does not expose per-day additions/deletions here,
+  // so LOC fields are intentionally left undefined instead of showing misleading values.
 
   calendar.lastSyncedAt = new Date().toISOString();
 
@@ -1134,12 +1148,16 @@ export function buildInsights(
   return insights;
 }
 
-export function buildCommitClock(allDays: ContributionDay[]) {
+export function buildCommitClock(allDays: ContributionDay[], timezone: string = 'UTC') {
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const dayTotals = new Array(7).fill(0);
   for (const day of allDays) {
-    const dow = new Date(day.date).getUTCDay();
-    dayTotals[dow] += day.contributionCount;
+    const dowStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'short',
+    }).format(new Date(day.date + 'T12:00:00Z'));
+    const dowIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(dowStr);
+    if (dowIndex !== -1) dayTotals[dowIndex] += day.contributionCount;
   }
   return dayNames.map((name, i) => ({ day: name, commits: dayTotals[i] }));
 }
@@ -1147,7 +1165,7 @@ export function buildCommitClock(allDays: ContributionDay[]) {
 export async function fetchContributedRepos(
   username: string,
   options: FetchOptions = {}
-): Promise<Record<string, unknown>[]> {
+): Promise<ContributedRepo[]> {
   const key = cacheKey('repos:contributed', username);
 
   const load = async () => {
@@ -1490,20 +1508,12 @@ export async function getFullDashboardData(username: string, options: FetchOptio
     });
     links.push({ source: profileData.login, target: r.name });
   });
-  contributedRepos.forEach((item) => {
-    const r = item as {
-      name: string;
-      nameWithOwner: string;
-      stargazerCount?: number;
-      forkCount?: number;
-      primaryLanguage?: { name: string } | null;
-      updatedAt?: string;
-    };
+  contributedRepos.forEach((r) => {
     nodes.push({
       id: r.nameWithOwner,
       name: r.name,
       type: 'Contribution',
-      val: Math.max(5, Math.min(20, (r.stargazerCount ?? 0) / 10 + 5)),
+      val: Math.max(5, Math.min(20, r.stargazerCount / 10 + 5)),
       color: '#22C55E',
       stats: {
         stars: r.stargazerCount,
@@ -1514,6 +1524,243 @@ export async function getFullDashboardData(username: string, options: FetchOptio
     });
     links.push({ source: profileData.login, target: r.nameWithOwner });
   });
+
+  // Calculate Hall of Fame
+  const hallOfFame: import('../types/dashboard').HallOfFameAward[] = [];
+
+  if (reposData.length > 0) {
+    // 1. Most Popular (Highest Stars)
+    const mostPopular = reposData.reduce(
+      (prev, current) => (current.stargazers_count > prev.stargazers_count ? current : prev),
+      reposData[0]
+    );
+    if (mostPopular && mostPopular.stargazers_count > 0) {
+      hallOfFame.push({
+        category: 'popular',
+        title: 'Most Popular',
+        repoName: mostPopular.name,
+        repoAvatar: `https://github.com/${mostPopular.owner?.login || profileData.login}.png?size=64`,
+        description: 'Highest community engagement and stars.',
+        centerpieceLabel: 'Total Stars',
+        centerpieceValue: mostPopular.stargazers_count,
+        bottomStats: `${mostPopular.forks_count || 0} Forks`,
+        explanation: `Earned for being your most starred repository.`,
+        icon: '⭐',
+        url: `https://github.com/${mostPopular.owner?.login || profileData.login}/${mostPopular.name}`,
+      });
+    }
+
+    // 2. Fastest Growing (Stars / Age in days)
+    const fastestGrowing = reposData.reduce((prev, current) => {
+      const getRate = (r: GitHubRepo) => {
+        if (!r.created_at) return 0;
+        const daysAge = Math.max(
+          1,
+          (Date.now() - new Date(r.created_at).getTime()) / (1000 * 60 * 60 * 24)
+        );
+        return r.stargazers_count / daysAge;
+      };
+      return getRate(current) > getRate(prev) ? current : prev;
+    }, reposData[0]);
+    if (fastestGrowing && fastestGrowing.stargazers_count > 0) {
+      const growthScore =
+        Math.round(
+          (fastestGrowing.stargazers_count /
+            Math.max(
+              1,
+              (Date.now() - new Date(fastestGrowing.created_at || Date.now()).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )) *
+            100
+        ) / 100;
+      hallOfFame.push({
+        category: 'growing',
+        title: 'Fastest Growing',
+        repoName: fastestGrowing.name,
+        repoAvatar: `https://github.com/${fastestGrowing.owner?.login || profileData.login}.png?size=64`,
+        description: 'Largest growth in stars relative to its age.',
+        centerpieceLabel: 'Growth Score',
+        centerpieceValue: growthScore,
+        bottomStats: `${fastestGrowing.stargazers_count} Stars`,
+        explanation: 'Earning stars at the fastest rate among your projects.',
+        icon: '🚀',
+        url: `https://github.com/${fastestGrowing.owner?.login || profileData.login}/${fastestGrowing.name}`,
+      });
+    }
+
+    // 3. Most Collaborative (Highest Forks)
+    const mostCollaborative = reposData.reduce(
+      (prev, current) => ((current.forks_count || 0) > (prev.forks_count || 0) ? current : prev),
+      reposData[0]
+    );
+    if (mostCollaborative && (mostCollaborative.forks_count || 0) > 0) {
+      hallOfFame.push({
+        category: 'collaborative',
+        title: 'Most Collaborative',
+        repoName: mostCollaborative.name,
+        repoAvatar: `https://github.com/${mostCollaborative.owner?.login || profileData.login}.png?size=64`,
+        description: 'Highest number of forks indicating community collaboration.',
+        centerpieceLabel: 'Total Forks',
+        centerpieceValue: mostCollaborative.forks_count || 0,
+        bottomStats: 'Community-driven project',
+        explanation: 'Your most forked and community-driven project.',
+        icon: '🤝',
+        url: `https://github.com/${mostCollaborative.owner?.login || profileData.login}/${mostCollaborative.name}`,
+      });
+    }
+
+    // 6. Rising Star (recently created repo with highest stars/activity, created within last 18 months)
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - 18);
+    const recentRepos = reposData.filter(
+      (r) => r.created_at && new Date(r.created_at) > cutoffDate
+    );
+    if (recentRepos.length > 0) {
+      const risingStarRepo = recentRepos.reduce((prev, current) => {
+        const getScore = (r: GitHubRepo) => {
+          const rc = repoContributions.find((c) => c.repository.name === r.name);
+          const commits = rc ? rc.contributions.totalCount : 0;
+          return r.stargazers_count * 2 + commits + (r.forks_count || 0);
+        };
+        return getScore(current) > getScore(prev) ? current : prev;
+      }, recentRepos[0]);
+      const risingScore =
+        risingStarRepo.stargazers_count * 2 +
+        (repoContributions.find((c) => c.repository.name === risingStarRepo.name)?.contributions
+          .totalCount || 0) +
+        (risingStarRepo.forks_count || 0);
+      if (risingScore > 0) {
+        hallOfFame.push({
+          category: 'growing',
+          title: 'Rising Star',
+          repoName: risingStarRepo.name,
+          repoAvatar: `https://github.com/${risingStarRepo.owner?.login || profileData.login}.png?size=64`,
+          description: 'Newest repository showing the fastest traction.',
+          centerpieceLabel: 'Impact Score',
+          centerpieceValue: risingScore,
+          bottomStats: `${risingStarRepo.stargazers_count} Stars • ${risingStarRepo.forks_count || 0} Forks`,
+          explanation: 'Your newest project gaining the most momentum.',
+          icon: '⚡',
+          url: `https://github.com/${risingStarRepo.owner?.login || profileData.login}/${risingStarRepo.name}`,
+        });
+      }
+    }
+
+    // 7. Most Consistent (oldest non-fork repo that is still actively updated)
+    const ownedRepos = reposData.filter((r) => !r.fork && r.created_at && r.updated_at);
+    if (ownedRepos.length > 0) {
+      const mostConsistent = ownedRepos.reduce((prev, current) => {
+        const getAge = (r: GitHubRepo) => {
+          if (!r.created_at || !r.updated_at) return 0;
+          const ageDays = (Date.now() - new Date(r.created_at).getTime()) / (1000 * 60 * 60 * 24);
+          const daysSinceUpdate =
+            (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+          const recencyFactor = daysSinceUpdate < 180 ? 1 : 0.3;
+          return ageDays * recencyFactor;
+        };
+        return getAge(current) > getAge(prev) ? current : prev;
+      }, ownedRepos[0]);
+      const consistencyScore = Math.round(
+        (Date.now() - new Date(mostConsistent.created_at!).getTime()) / (1000 * 60 * 60 * 24 * 30)
+      );
+      if (consistencyScore > 1) {
+        hallOfFame.push({
+          category: 'active',
+          title: 'Most Consistent',
+          repoName: mostConsistent.name,
+          repoAvatar: `https://github.com/${mostConsistent.owner?.login || profileData.login}.png?size=64`,
+          description: 'Longest sustained development effort.',
+          centerpieceLabel: 'Age (Months)',
+          centerpieceValue: consistencyScore,
+          bottomStats: `Still actively maintained`,
+          explanation: 'Your longest-running actively maintained project.',
+          icon: '🎯',
+          url: `https://github.com/${mostConsistent.owner?.login || profileData.login}/${mostConsistent.name}`,
+        });
+      }
+    }
+  }
+
+  // 4. Most Contributed (From recent repoContributions)
+  if (repoContributions.length > 0) {
+    const mostContributed = repoContributions.reduce(
+      (prev, current) =>
+        current.contributions.totalCount > prev.contributions.totalCount ? current : prev,
+      repoContributions[0]
+    );
+    if (mostContributed && mostContributed.contributions.totalCount > 0) {
+      const repoNameStr =
+        mostContributed.repository.nameWithOwner || mostContributed.repository.name;
+      const ownerStr = mostContributed.repository.nameWithOwner
+        ? mostContributed.repository.nameWithOwner.split('/')[0]
+        : profileData.login;
+      hallOfFame.push({
+        category: 'contributed',
+        title: 'Most Contributed',
+        repoName: repoNameStr,
+        repoAvatar: `https://github.com/${ownerStr}.png?size=64`,
+        description: 'Highest contribution volume over the past year.',
+        centerpieceLabel: 'Contributions',
+        centerpieceValue: mostContributed.contributions.totalCount,
+        bottomStats: 'Over the past year',
+        explanation: 'The project you have committed to the most recently.',
+        icon: '🔥',
+        url: `https://github.com/${repoNameStr}`,
+      });
+    }
+  }
+
+  // 5. Most Active (Combo of recent updates and commits)
+  if (repoContributions.length > 0 && reposData.length > 0) {
+    const mostActive = reposData.reduce((prev, current) => {
+      const getScore = (r: GitHubRepo) => {
+        const rc = repoContributions.find((c) => c.repository.name === r.name);
+        const commits = rc ? rc.contributions.totalCount : 0;
+        const daysSinceUpdate = r.updated_at
+          ? Math.max(1, (Date.now() - new Date(r.updated_at).getTime()) / (1000 * 60 * 60 * 24))
+          : 100;
+        return commits + 30 / daysSinceUpdate;
+      };
+      return getScore(current) > getScore(prev) ? current : prev;
+    }, reposData[0]);
+
+    if (mostActive) {
+      const activeScore = Math.round(
+        (repoContributions.find((c) => c.repository.name === mostActive.name)?.contributions
+          .totalCount || 0) +
+          30 /
+            Math.max(
+              1,
+              (Date.now() - new Date(mostActive.updated_at || Date.now()).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+      );
+      hallOfFame.push({
+        category: 'active',
+        title: 'Most Active',
+        repoName: mostActive.name,
+        repoAvatar: `https://github.com/${mostActive.owner?.login || profileData.login}.png?size=64`,
+        description: 'Highest overall recent activity.',
+        centerpieceLabel: 'Activity Score',
+        centerpieceValue: activeScore,
+        bottomStats: 'Recent commits & updates',
+        explanation: 'Your most actively maintained repository based on commits and updates.',
+        icon: '🏆',
+        url: `https://github.com/${mostActive.owner?.login || profileData.login}/${mostActive.name}`,
+      });
+    }
+  }
+
+  // Deduplicate by category+title, cap at 6
+  const seenTitles = new Set<string>();
+  const finalHallOfFame = hallOfFame
+    .filter((award) => {
+      const key = `${award.category}-${award.title}`;
+      if (seenTitles.has(key)) return false;
+      seenTitles.add(key);
+      return true;
+    })
+    .slice(0, 6);
 
   return {
     profile: buildProfileData(profileData, totalStars, score),
@@ -1539,6 +1786,7 @@ export async function getFullDashboardData(username: string, options: FetchOptio
     commitClock,
     popularRepos,
     pinnedRepos,
+    hallOfFame: finalHallOfFame,
     graphData: { nodes, links },
     lastSyncedAt: calendarData.lastSyncedAt,
   };
@@ -1547,7 +1795,8 @@ export async function getFullDashboardData(username: string, options: FetchOptio
 export async function getWrappedData(
   username: string,
   year?: string,
-  options?: FetchOptions
+  options?: FetchOptions,
+  timezone: string = 'UTC'
 ): Promise<import('../types/dashboard').WrappedStats> {
   const trimmedYear = typeof year === 'string' ? year.trim() : '';
   const fallbackYear = new Date().getFullYear().toString();
@@ -1586,8 +1835,11 @@ export async function getWrappedData(
     Object.entries(monthTotals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? `${normalizedYear}-01`;
 
   const weekendDays = allDays.filter((d) => {
-    const dow = new Date(d.date).getUTCDay();
-    return dow === 0 || dow === 6;
+    const dowStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'short',
+    }).format(new Date(d.date + 'T12:00:00Z'));
+    return dowStr === 'Sat' || dowStr === 'Sun';
   });
   const weekendTotal = weekendDays.reduce((sum, d) => sum + d.contributionCount, 0);
   const weekendRatio =

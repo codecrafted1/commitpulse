@@ -12,9 +12,23 @@ vi.mock('@/models/Notification', () => ({
   },
 }));
 vi.mock('@/lib/rate-limit', () => ({
+  getRateLimitHeaders: vi.fn((result) => ({
+    'X-RateLimit-Limit': result.limit.toString(),
+    'X-RateLimit-Remaining': result.remaining.toString(),
+    'X-RateLimit-Reset': result.reset.toString(),
+  })),
   notifyRateLimiter: {
     check: vi.fn().mockResolvedValue(true),
+    checkWithResult: vi.fn().mockResolvedValue({
+      success: true,
+      limit: 5,
+      remaining: 4,
+      reset: Date.now() + 60000,
+    }),
   },
+}));
+vi.mock('@/utils/getClientIp', () => ({
+  getClientIp: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 vi.mock('@/services/github/validate-user', () => ({
   gitHubUserValidator: {
@@ -25,6 +39,7 @@ vi.mock('@/services/github/validate-user', () => ({
 import { Notification } from '@/models/Notification';
 import { notifyRateLimiter } from '@/lib/rate-limit';
 import { gitHubUserValidator } from '@/services/github/validate-user';
+import { getClientIp } from '@/utils/getClientIp';
 
 const makeRequest = (method: string, body?: object, search?: string) => {
   const url = `http://localhost:3000/api/notify${search ? '?' + search : ''}`;
@@ -102,9 +117,18 @@ describe('POST /api/notify', () => {
   // ── Rate limiting ────────────────────────────────────────────────────────
 
   it('returns 429 when rate limited', async () => {
-    vi.mocked(notifyRateLimiter.check).mockResolvedValue(false);
+    const reset = Date.now() + 60000;
+    vi.mocked(notifyRateLimiter.checkWithResult).mockResolvedValueOnce({
+      success: false,
+      limit: 5,
+      remaining: 0,
+      reset,
+    });
     const res = await POST(makeRequest('POST', { username: 'testuser', email: 'a@b.com' }));
     expect(res.status).toBe(429);
+    expect(res.headers.get('x-ratelimit-limit')).toBe('5');
+    expect(res.headers.get('x-ratelimit-remaining')).toBe('0');
+    expect(res.headers.get('x-ratelimit-reset')).toBe(reset.toString());
   });
 
   // ── Per-username write cooldown ───────────────────────────────────────────
@@ -231,9 +255,45 @@ describe('GET /api/notify', () => {
   // ── Rate limiting ────────────────────────────────────────────────────────
 
   it('returns 429 when rate limited', async () => {
-    vi.mocked(notifyRateLimiter.check).mockResolvedValue(false);
+    const reset = Date.now() + 60000;
+    vi.mocked(notifyRateLimiter.checkWithResult).mockResolvedValueOnce({
+      success: false,
+      limit: 5,
+      remaining: 0,
+      reset,
+    });
     const res = await GET(makeRequest('GET', undefined, 'user=testuser'));
     expect(res.status).toBe(429);
+    expect(res.headers.get('x-ratelimit-limit')).toBe('5');
+    expect(res.headers.get('x-ratelimit-remaining')).toBe('0');
+    expect(res.headers.get('x-ratelimit-reset')).toBe(reset.toString());
+  });
+
+  it('applies rate limiting via user-agent fallback when IP is unknown', async () => {
+    // Simulates a client behind a misconfigured proxy where getClientIp returns 'unknown'.
+    // Previously the entire rate-limit block was skipped for these clients.
+    vi.mocked(getClientIp).mockReturnValueOnce('unknown');
+
+    const reset = Date.now() + 60000;
+    vi.mocked(notifyRateLimiter.checkWithResult).mockResolvedValueOnce({
+      success: false,
+      limit: 5,
+      remaining: 0,
+      reset,
+    });
+
+    const url = 'http://localhost:3000/api/notify?user=testuser';
+    const req = new NextRequest(url, {
+      method: 'GET',
+      headers: { 'user-agent': 'test-agent' },
+    });
+
+    const res = await GET(req);
+
+    // Must be rate limited even without a resolvable IP
+    expect(res.status).toBe(429);
+    // Verify checkWithResult was called with the user-agent fallback key
+    expect(notifyRateLimiter.checkWithResult).toHaveBeenCalledWith('unknown:test-agent');
   });
 
   // ── MONGODB_URI handling ──────────────────────────────────────────────────

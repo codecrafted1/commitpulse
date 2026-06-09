@@ -5,6 +5,7 @@ import { EditorPanel } from './components/EditorPanel';
 import { PreviewPanel } from './components/PreviewPanel';
 import { generateReadme, getEmptyReadme } from './utils/readmeGenerator';
 import type { GeneratorState } from './types';
+import type { ImportedData } from './utils/githubMapper';
 
 const INITIAL_STATE: GeneratorState = {
   name: '',
@@ -12,6 +13,9 @@ const INITIAL_STATE: GeneratorState = {
   selectedTechs: [],
   selectedSocials: [],
   socialLinks: {},
+  githubUsername: '',
+  showCommitPulse: false,
+  commitPulseAccent: '',
 };
 
 export function GeneratorClient() {
@@ -22,10 +26,42 @@ export function GeneratorClient() {
       state.name.trim() ||
       state.description.trim() ||
       state.selectedTechs.length > 0 ||
-      state.selectedSocials.some((id) => state.socialLinks[id]?.trim());
+      state.selectedSocials.some((id) => state.socialLinks[id]?.trim()) ||
+      (state.showCommitPulse && state.githubUsername.trim());
 
     return hasContent ? generateReadme(state) : getEmptyReadme();
   }, [state]);
+
+  const handleApplyImport = (data: ImportedData) => {
+    setState((prevState) => {
+      let shouldAskConfirmation = false;
+
+      if (data.name && prevState.name && prevState.name !== data.name) shouldAskConfirmation = true;
+      if (data.description && prevState.description && prevState.description !== data.description)
+        shouldAskConfirmation = true;
+
+      let confirmOverwrite = false;
+      if (shouldAskConfirmation) {
+        confirmOverwrite = window.confirm(
+          'You have existing form values. Are you sure you want to overwrite them with the imported data?'
+        );
+      }
+
+      return {
+        ...prevState,
+        name: confirmOverwrite || !prevState.name ? data.name || prevState.name : prevState.name,
+        description:
+          confirmOverwrite || !prevState.description
+            ? data.description || prevState.description
+            : prevState.description,
+        selectedTechs: Array.from(new Set([...prevState.selectedTechs, ...data.selectedTechs])),
+        selectedSocials: Array.from(
+          new Set([...prevState.selectedSocials, ...data.selectedSocials])
+        ),
+        socialLinks: { ...prevState.socialLinks, ...data.socialLinks },
+      };
+    });
+  };
 
   return (
     <div className="flex flex-col lg:flex-row gap-5 xl:gap-6 items-start w-full">
@@ -42,6 +78,10 @@ export function GeneratorClient() {
               socialLinks: { ...s.socialLinks, [id]: url },
             }))
           }
+          onGithubUsernameChange={(v) => setState((s) => ({ ...s, githubUsername: v }))}
+          onShowCommitPulseChange={(v) => setState((s) => ({ ...s, showCommitPulse: v }))}
+          onCommitPulseAccentChange={(v) => setState((s) => ({ ...s, commitPulseAccent: v }))}
+          onApplyImport={handleApplyImport}
         />
       </div>
 
