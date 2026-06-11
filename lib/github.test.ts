@@ -1545,6 +1545,40 @@ describe('GitHub API cache behavior', () => {
     expect(results.map((result) => result.calendar.repoContributions)).toEqual([42, 42, 42]);
   });
 
+  it('does not coalesce requests when options.signal is provided', async () => {
+    const resolvers: ((response: Response) => void)[] = [];
+    vi.mocked(fetch).mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    const controller = new AbortController();
+    const requests = Promise.all([
+      fetchGitHubContributions('octocat'),
+      fetchGitHubContributions('octocat', { signal: controller.signal }),
+    ]);
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+
+    const responseFn = () =>
+      mockResponse({
+        data: {
+          user: {
+            contributionsCollection: {
+              contributionCalendar: mockCalendar,
+              commitContributionsByRepository: [],
+            },
+          },
+        },
+      });
+    resolvers.forEach((resolve) => resolve(responseFn()));
+
+    const results = await requests;
+    expect(results.map((result) => result.calendar.repoContributions)).toEqual([42, 42]);
+  });
+
   it('refresh bypass: bypassCache=true forces a fresh fetch', async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       mockResponse({

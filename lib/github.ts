@@ -622,6 +622,7 @@ export function displayName(profile: GitHubUserProfile): string {
  * ========================================================================== */
 
 const FETCH_TIMEOUT_MS = 4000;
+const activeContributionsPromises = new Map<string, Promise<ExtendedContributionData>>();
 
 export async function fetchGitHubContributions(
   username: string,
@@ -670,7 +671,35 @@ export async function fetchGitHubContributions(
     }
   };
 
-  if (options.bypassCache || options.forceRefresh) {
+  const coalescedLoad = () => {
+    if (options.signal) {
+      return loadWithTimeout();
+    }
+    let pending = activeContributionsPromises.get(key);
+    if (!pending) {
+      pending = loadWithTimeout().finally(() => {
+        activeContributionsPromises.delete(key);
+      });
+      activeContributionsPromises.set(key, pending);
+      // Safety max-age cleanup: remove from promise map after 30 seconds anyway
+      const timer = setTimeout(() => {
+        activeContributionsPromises.delete(key);
+      }, 30000);
+      if (timer && typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    }
+    return pending;
+  };
+
+  if (options.signal) {
+    if (options.bypassCache || options.forceRefresh) {
+      return await loadWithTimeout();
+    }
+    const cached = await contributionsCache.get(key);
+    if (cached !== null && !shouldFetch(cached)) {
+      return cached;
+    }
     try {
       return await loadWithTimeout();
     } catch (err: unknown) {
@@ -689,8 +718,27 @@ export async function fetchGitHubContributions(
     }
   }
 
+  if (options.bypassCache || options.forceRefresh) {
+    try {
+      return await coalescedLoad();
+    } catch (err: unknown) {
+      const staleData = await contributionsCache.get(key);
+      if (staleData) {
+        console.warn(
+          `[GitHub API] Fetch failed or timed out for "${username}", falling back to stale cache:`,
+          err
+        );
+        return {
+          ...staleData,
+          isOfflineFallback: true,
+        };
+      }
+      throw err;
+    }
+  }
+
   try {
-    return await contributionsCache.getOrSet(key, loadWithTimeout, LONG_CACHE_TTL, shouldFetch);
+    return await contributionsCache.getOrSet(key, coalescedLoad, LONG_CACHE_TTL, shouldFetch);
   } catch (err: unknown) {
     const staleData = await contributionsCache.get(key);
     if (staleData) {
