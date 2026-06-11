@@ -3,7 +3,12 @@
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { fetchGitHubContributions, getOrgDashboardData } from '@/lib/github';
-import { calculateStreak, calculateMonthlyStats, aggregateCalendars } from '@/lib/calculate';
+import {
+  calculateStreak,
+  calculateMonthlyStats,
+  aggregateCalendars,
+  chunkDaysIntoWeeks,
+} from '@/lib/calculate';
 import {
   generateNotFoundSVG,
   generateRateLimitSVG,
@@ -12,15 +17,12 @@ import {
   generateVersusSVG,
   generateHeatmapSVG,
   generatePulseSVG,
+  generateSkylineSVG,
   generateLanguagesSVG,
 } from '@/lib/svg/generator';
+import { generateConstellationSVG } from '@/lib/svg/constellation';
 import { getSecondsUntilUTCMidnight, getSecondsUntilMidnightInTimezone } from '@/utils/time';
-import type {
-  BadgeParams,
-  ContributionCalendar,
-  RepoContribution,
-  ExtendedContributionData,
-} from '@/types';
+import type { BadgeParams, RepoContribution, ExtendedContributionData } from '@/types';
 import { themes } from '@/lib/svg/themes';
 import { streakParamsSchema } from '@/lib/validations';
 import { sanitizeHexColor, sanitizeRadius } from '@/lib/svg/sanitizer';
@@ -70,6 +72,10 @@ export async function GET(request: Request) {
       user,
       theme,
       bg,
+      bgType,
+      bgStart,
+      bgEnd,
+      bgAngle,
       text,
       accent,
       scale,
@@ -111,7 +117,14 @@ export async function GET(request: Request) {
       badges,
       entrance,
     } = parseResult.data;
-    const normalizedView = view as 'default' | 'monthly' | 'heatmap' | 'pulse' | 'languages';
+    const normalizedView = view as
+      | 'default'
+      | 'monthly'
+      | 'heatmap'
+      | 'pulse'
+      | 'skyline'
+      | 'languages'
+      | 'constellation';
     const themeName = theme || 'dark';
 
     // Treat either ?refresh=true or ?bypassCache=true as a cache-bypass request
@@ -133,16 +146,25 @@ export async function GET(request: Request) {
       }
     }
 
-    let from = customFrom
-      ? new Date(customFrom).toISOString()
-      : year
-        ? `${year}-01-01T00:00:00Z`
-        : undefined;
-    let to = customTo
-      ? new Date(customTo).toISOString()
-      : year
-        ? `${year}-12-31T23:59:59Z`
-        : undefined;
+    const parseDate = (value?: string) => {
+      if (!value) {
+        return undefined;
+      }
+
+      const date = new Date(value);
+
+      if (Number.isNaN(date.getTime())) {
+        const validationErr = new Error(`Invalid date: ${value}`);
+        validationErr.name = 'ValidationError';
+        throw validationErr;
+      }
+
+      return date.toISOString();
+    };
+
+    let from = parseDate(customFrom) ?? (year ? `${year}-01-01T00:00:00Z` : undefined);
+
+    let to = parseDate(customTo) ?? (year ? `${year}-12-31T23:59:59Z` : undefined);
 
     if (normalizedView === 'monthly') {
       const referenceDate = getMonthlyReferenceDate(year, timezone) || new Date();
@@ -200,14 +222,25 @@ export async function GET(request: Request) {
     const borderParam = searchParams.get('border');
     const sanitizedBorder = borderParam ? borderParam.replace(/[^a-fA-F0-9]/g, '') : undefined;
     const animate = searchParams.get('animate') !== 'false';
+    // Validate and clamp the speed param to prevent broken SVG animation
+    const rawSpeedNum = speed ? parseFloat(String(speed)) : NaN;
+    const validatedSpeed = (
+      !isNaN(rawSpeedNum) && isFinite(rawSpeedNum) && rawSpeedNum >= 1 && rawSpeedNum <= 60
+        ? `${rawSpeedNum}s`
+        : '8s'
+    ) as `${number}s`;
     const params: BadgeParams = {
       user: targetEntity,
       bg: isAutoTheme ? selectedTheme.bg : bg || selectedTheme.bg,
+      bgType,
+      bgStart,
+      bgEnd,
+      bgAngle,
       text: isAutoTheme ? selectedTheme.text : text || selectedTheme.text,
       accent: isAutoTheme ? selectedTheme.accent : accent || selectedTheme.accent,
       border: sanitizedBorder,
       radius,
-      speed: speed && /^(?:[2-9]|1\d|20)s$/.test(speed) ? speed : '8s',
+      speed: validatedSpeed,
       scale,
       font,
       autoTheme: isAutoTheme,
@@ -274,7 +307,6 @@ export async function GET(request: Request) {
           'ValidationError: The streak comparison generator strictly accepts a maximum of 2 usernames.'
         );
       }
-
       let lastError: unknown = null;
       let hasOfflineFallback = false;
       const fetchedCalendars = await Promise.all(
@@ -341,11 +373,7 @@ export async function GET(request: Request) {
 
       calendar = {
         totalContributions: filteredDays.reduce((sum, d) => sum + d.contributionCount, 0),
-        weeks: [
-          {
-            contributionDays: filteredDays,
-          },
-        ],
+        weeks: chunkDaysIntoWeeks(filteredDays),
       };
     }
 
@@ -426,6 +454,12 @@ export async function GET(request: Request) {
       // even though the sparkline generator will extract its own daily 30-day timeline below.
       const stats = calculateStreak(calendar, timezone, undefined, grace);
       svg = generatePulseSVG(stats, params, calendar);
+    } else if (normalizedView === 'skyline') {
+      const stats = calculateStreak(calendar, timezone, undefined, grace);
+      svg = generateSkylineSVG(stats, params, calendar);
+    } else if (normalizedView === 'constellation') {
+      const stats = calculateStreak(calendar, timezone, undefined, grace);
+      svg = generateConstellationSVG(stats, params, calendar);
     } else if (versus && versusCalendar) {
       const stats1 = calculateStreak(calendar, timezone, undefined, grace);
       const stats2 = calculateStreak(versusCalendar, timezone, undefined, grace);
