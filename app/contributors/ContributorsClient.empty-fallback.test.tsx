@@ -84,9 +84,7 @@ describe('ContributorsClient - Edge Cases & Empty/Missing Inputs Verification', 
       />
     );
 
-    expect(
-      screen.getByRole('link', { name: /View Repository/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View Repository/i })).toBeInTheDocument();
   });
 
   it('renders safely with empty top contributors array', () => {
@@ -98,35 +96,19 @@ describe('ContributorsClient - Edge Cases & Empty/Missing Inputs Verification', 
       />
     );
 
-    expect(
-      screen.getByRole('link', { name: /Explore The Elite/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Explore The Elite/i })).toBeInTheDocument();
   });
 
   it('renders correctly when total contributions is zero', () => {
-    render(
-      <ContributorsClient
-        contributors={[]}
-        totalContributions={0}
-        topContributors={[]}
-      />
-    );
+    render(<ContributorsClient contributors={[]} totalContributions={0} topContributors={[]} />);
 
-    expect(
-      screen.getByRole('link', { name: /View Repository/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View Repository/i })).toBeInTheDocument();
   });
 
   it('does not emit console errors when rendered with empty data', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    render(
-      <ContributorsClient
-        contributors={[]}
-        totalContributions={0}
-        topContributors={[]}
-      />
-    );
+    render(<ContributorsClient contributors={[]} totalContributions={0} topContributors={[]} />);
 
     expect(consoleError).not.toHaveBeenCalled();
 
@@ -134,20 +116,10 @@ describe('ContributorsClient - Edge Cases & Empty/Missing Inputs Verification', 
   });
 
   it('preserves core navigation actions with all datasets empty', () => {
-    render(
-      <ContributorsClient
-        contributors={[]}
-        totalContributions={0}
-        topContributors={[]}
-      />
-    );
+    render(<ContributorsClient contributors={[]} totalContributions={0} topContributors={[]} />);
 
-    expect(
-      screen.getByRole('link', { name: /View Repository/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View Repository/i })).toBeInTheDocument();
 
-    expect(
-      screen.getByRole('link', { name: /Explore The Elite/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Explore The Elite/i })).toBeInTheDocument();
   });
 });
