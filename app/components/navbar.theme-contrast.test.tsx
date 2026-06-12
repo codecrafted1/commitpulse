@@ -39,8 +39,10 @@ beforeEach(() => {
 describe('Navbar theme contrast', () => {
   it('renders navbar in light mode', () => {
     mockedTheme.mockReturnValue({
+      animationName: 'circle',
       isDark: false,
       mounted: true,
+      setIsDark: vi.fn(),
       toggleTheme: vi.fn(),
     });
 
@@ -51,8 +53,10 @@ describe('Navbar theme contrast', () => {
 
   it('renders navbar in dark mode', () => {
     mockedTheme.mockReturnValue({
+      animationName: 'circle',
       isDark: true,
       mounted: true,
+      setIsDark: vi.fn(),
       toggleTheme: vi.fn(),
     });
 
@@ -63,8 +67,10 @@ describe('Navbar theme contrast', () => {
 
   it('contains light and dark background contrast classes', () => {
     mockedTheme.mockReturnValue({
+      animationName: 'circle',
       isDark: false,
       mounted: true,
+      setIsDark: vi.fn(),
       toggleTheme: vi.fn(),
     });
 
@@ -78,20 +84,25 @@ describe('Navbar theme contrast', () => {
 
   it('contains readable text contrast classes', () => {
     mockedTheme.mockReturnValue({
+      animationName: 'circle',
       isDark: true,
       mounted: true,
+      setIsDark: vi.fn(),
       toggleTheme: vi.fn(),
     });
 
     render(<Navbar />);
 
     expect(document.body.innerHTML).toContain('dark:text');
+    expect(document.body.innerHTML).toContain('text-white');
   });
 
-  it('keeps theme toggle accessible', () => {
+  it('keeps theme toggle accessible in both themes', () => {
     mockedTheme.mockReturnValue({
+      animationName: 'circle',
       isDark: false,
       mounted: true,
+      setIsDark: vi.fn(),
       toggleTheme: vi.fn(),
     });
 
