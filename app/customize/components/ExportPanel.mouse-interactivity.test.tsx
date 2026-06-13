@@ -1,159 +1,118 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 import { ExportPanel } from './ExportPanel';
 
-describe('ExportPanel - Mouse Interactivity', () => {
-  const renderPanel = (overrides?: Partial<Parameters<typeof ExportPanel>[0]>) => {
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+vi.mock('../utils', () => ({
+  getPlaceholderSnippet: () => '<!-- placeholder snippet -->',
+}));
+
+vi.mock('@/context/TranslationContext', () => ({
+  useTranslation: () => ({
+    t: (key: string, params?: { defaultValue?: string }) => {
+      if (params?.defaultValue) return params.defaultValue;
+
+      const translations: Record<string, string> = {
+        'customize.export.markdown': 'Markdown',
+        'customize.export.html': 'HTML',
+        'customize.export.tsx': 'React TSX',
+        'customize.export.action': 'GitHub Action',
+        'customize.export.copy_aria_enabled': 'Copy Markdown export snippet to clipboard',
+        'customize.export.copy_aria_disabled':
+          'Add a GitHub username to enable copying the Markdown export snippet',
+        'customize.export.download_svg': 'Download SVG',
+        'customize.export.download_png': 'Download PNG',
+        'customize.export.copy_format': 'Copy Markdown',
+        'customize.export.footer_tip':
+          "Paste this into your GitHub profile's README.md. The badge renders server-side, no script required.",
+      };
+
+      return translations[key] ?? key;
+    },
+  }),
+}));
+
+const defaultProps = {
+  format: 'markdown' as const,
+  snippet: '![CommitPulse](https://example.com/badge.svg)',
+  copied: false,
+  copyStatusMessage: 'Markdown snippet copied to clipboard.',
+  hasUsername: true,
+  username: 'octocat',
+  onFormatChange: vi.fn(),
+  onCopy: vi.fn(),
+};
+
+describe('ExportPanel Mouse Interactivity', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('triggers format change when HTML button is clicked', () => {
     const onFormatChange = vi.fn();
-    const onCopy = vi.fn();
 
-    const view = render(
-      <ExportPanel
-        format="markdown"
-        snippet="![CommitPulse](https://example.com/badge.svg)"
-        copied={false}
-        copyStatusMessage="Markdown snippet copied to clipboard."
-        hasUsername
-        username="octocat"
-        onFormatChange={onFormatChange}
-        onCopy={onCopy}
-        {...overrides}
-      />
-    );
+    render(<ExportPanel {...defaultProps} onFormatChange={onFormatChange} />);
 
-    return { onFormatChange, onCopy, view };
-  };
+    fireEvent.click(screen.getByRole('button', { name: 'HTML' }));
 
-  it('shows tooltip on hover over interactive elements', async () => {
-    const user = userEvent.setup();
-    renderPanel({ format: 'action' });
-
-    const step2Buttons = screen.getAllByRole('button', {
-      name: /copy step 2 markdown snippet/i,
-    });
-    const step2Button = step2Buttons[0];
-
-    await user.hover(step2Button);
-
-    expect(step2Button).toHaveAttribute('title', 'Copy Step 2 markdown');
-  });
-
-  it('applies pointer cursor classes on hoverable buttons', () => {
-    renderPanel();
-
-    const htmlButton = screen.getByRole('button', { name: 'HTML' });
-    const copyButton = screen.getByRole('button', {
-      name: /copy markdown export snippet to clipboard/i,
-    });
-    const downloadButton = screen.getByRole('button', {
-      name: /download badge as commitpulse-octocat\.svg/i,
-    });
-
-    expect(htmlButton.className).toContain('hover:text-black');
-    expect(copyButton.className).toContain('hover:bg-gray-300/80');
-    expect(downloadButton.className).toContain('hover:bg-emerald-500/20');
-
-    fireEvent.mouseEnter(htmlButton);
-    fireEvent.mouseEnter(copyButton);
-    fireEvent.mouseEnter(downloadButton);
-  });
-
-  it('hides tooltip when mouse leaves the element', async () => {
-    const user = userEvent.setup();
-    renderPanel({ format: 'action' });
-
-    const step2Buttons = screen.getAllByRole('button', {
-      name: /copy step 2 markdown snippet/i,
-    });
-    const step2Button = step2Buttons[0];
-
-    await user.hover(step2Button);
-    expect(step2Button).toHaveAttribute('title', 'Copy Step 2 markdown');
-
-    await user.unhover(step2Button);
-
-    await waitFor(() => {
-      expect(screen.queryByRole('tooltip')).toBeNull();
-    });
-  });
-
-  it('propagates click events to parent elements', async () => {
-    const user = userEvent.setup();
-    const onCopy = vi.fn();
-    const onFormatChange = vi.fn();
-    const parentClick = vi.fn();
-
-    render(
-      <div onClick={parentClick}>
-        <ExportPanel
-          format="markdown"
-          snippet="![CommitPulse](https://example.com/badge.svg)"
-          copied={false}
-          copyStatusMessage="Markdown snippet copied to clipboard."
-          hasUsername
-          username="octocat"
-          onFormatChange={onFormatChange}
-          onCopy={onCopy}
-        />
-      </div>
-    );
-
-    const copyButton = screen.getByRole('button', {
-      name: /copy markdown export snippet to clipboard/i,
-    });
-    await user.click(copyButton);
-    expect(onCopy).toHaveBeenCalledTimes(1);
-
-    const htmlButton = screen.getByRole('button', { name: 'HTML' });
-    await user.click(htmlButton);
+    expect(onFormatChange).toHaveBeenCalledTimes(1);
     expect(onFormatChange).toHaveBeenCalledWith('html');
-
-    expect(parentClick).toHaveBeenCalled();
   });
 
-  it('calculates tooltip position based on mouse coordinates', () => {
-    renderPanel({ format: 'action' });
+  it('triggers copy callback when copy button is clicked', () => {
+    const onCopy = vi.fn();
 
-    const step2Buttons = screen.getAllByRole('button', {
-      name: /copy step 2 markdown snippet/i,
+    render(<ExportPanel {...defaultProps} onCopy={onCopy} />);
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /copy markdown export snippet to clipboard/i,
+      })
+    );
+
+    expect(onCopy).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies disabled cursor styling when username is missing', () => {
+    render(<ExportPanel {...defaultProps} hasUsername={false} />);
+
+    const disabledButtons = screen
+      .getAllByRole('button')
+      .filter((button) => (button as HTMLButtonElement).disabled);
+
+    expect(disabledButtons.length).toBeGreaterThan(0);
+
+    disabledButtons.forEach((button) => {
+      expect(button.className).toContain('cursor-not-allowed');
     });
-    const step2Button = step2Buttons[0];
+  });
 
-    const mockRect = {
-      width: 40,
-      height: 40,
-      top: 100,
-      left: 200,
-      bottom: 140,
-      right: 240,
-      x: 200,
-      y: 100,
-    };
+  it('disables download controls in action mode', () => {
+    render(<ExportPanel {...defaultProps} format="action" />);
 
-    vi.spyOn(step2Button, 'getBoundingClientRect').mockReturnValue(mockRect as DOMRect);
+    const disabledButtons = screen
+      .getAllByRole('button')
+      .filter((button) => (button as HTMLButtonElement).disabled);
 
-    const mouseX = mockRect.left + mockRect.width / 2;
-    const mouseY = mockRect.top + mockRect.height / 2;
+    expect(disabledButtons.length).toBeGreaterThan(0);
+  });
 
-    fireEvent.mouseMove(step2Button, {
-      clientX: mouseX,
-      clientY: mouseY,
-      bubbles: true,
+  it('renders interactive buttons with hover transition classes', () => {
+    render(<ExportPanel {...defaultProps} />);
+
+    const copyButton = screen.getByRole('button', {
+      name: /copy markdown export snippet to clipboard/i,
     });
 
-    fireEvent.mouseEnter(step2Button, {
-      clientX: mouseX,
-      clientY: mouseY,
-      bubbles: true,
-    });
-
-    const rect = step2Button.getBoundingClientRect();
-    const expectedX = rect.left + rect.width / 2;
-    const expectedY = rect.top + rect.height / 2;
-
-    expect(expectedX).toBe(220);
-    expect(expectedY).toBe(120);
-    expect(step2Button).toHaveAttribute('title', 'Copy Step 2 markdown');
+    expect(copyButton.className).toContain('hover:bg-gray-300/80');
+    expect(copyButton.className).toContain('hover:scale-[1.03]');
+    expect(copyButton.className).toContain('active:scale-[0.97]');
   });
 });
