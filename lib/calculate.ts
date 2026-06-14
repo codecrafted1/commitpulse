@@ -132,12 +132,19 @@ export function calculateStreak(
   const weeks = calendar.weeks || [];
   const days = weeks.flatMap((week) => week?.contributionDays || []).filter(Boolean);
 
+  const seen = new Set<string>();
+  const uniqueDays = days.filter((d) => {
+    if (!d || seen.has(d.date)) return false;
+    seen.add(d.date);
+    return true;
+  });
+
   let currentStreak = 0;
   let longestStreak = 0;
   let tempStreak = 0;
 
   // 1. Calculate Longest Streak (Standard loop)
-  for (const day of days) {
+  for (const day of uniqueDays) {
     if (day && day.contributionCount > 0) {
       tempStreak++;
       if (tempStreak > longestStreak) longestStreak = tempStreak;
@@ -147,10 +154,10 @@ export function calculateStreak(
   }
 
   // 2. Calculate Current Streak (Backwards loop with Grace Period)
-  let todayIndex = findTodayIndex(days, timezone, now);
+  let todayIndex = findTodayIndex(uniqueDays, timezone, now);
 
   if (todayIndex < 0) {
-    const lastIndex = days.length - 1;
+    const lastIndex = uniqueDays.length - 1;
     if (lastIndex < 0) {
       return {
         currentStreak: 0,
@@ -160,7 +167,7 @@ export function calculateStreak(
       };
     }
 
-    const lastDateStr = days[lastIndex]?.date;
+    const lastDateStr = uniqueDays[lastIndex]?.date;
 
     if (lastDateStr && localTodayStr > lastDateStr) {
       todayIndex = lastIndex;
@@ -177,14 +184,14 @@ export function calculateStreak(
   let consecutiveZeroDays = 0;
   if (todayIndex >= 0) {
     let idx = todayIndex - 1;
-    while (idx >= 0 && days[idx].contributionCount === 0) {
+    while (idx >= 0 && uniqueDays[idx].contributionCount === 0) {
       consecutiveZeroDays++;
       idx--;
     }
   }
 
-  const isActualToday = todayIndex >= 0 && days[todayIndex].date === localTodayStr;
-  const todayHasCommits = todayIndex >= 0 && days[todayIndex].contributionCount > 0;
+  const isActualToday = todayIndex >= 0 && uniqueDays[todayIndex].date === localTodayStr;
+  const todayHasCommits = todayIndex >= 0 && uniqueDays[todayIndex].contributionCount > 0;
 
   // If we are looking at the actual today, and it has no commits,
   const evaluationIndex =
@@ -195,7 +202,7 @@ export function calculateStreak(
   let isStreakAlive = false;
   for (let i = 0; i <= grace; i++) {
     const checkIndex = evaluationIndex - i;
-    if (checkIndex >= 0 && days[checkIndex] && days[checkIndex].contributionCount > 0) {
+    if (checkIndex >= 0 && uniqueDays[checkIndex] && uniqueDays[checkIndex].contributionCount > 0) {
       isStreakAlive = true;
       break;
     }
@@ -203,10 +210,15 @@ export function calculateStreak(
 
   if (isStreakAlive) {
     let i = evaluationIndex;
-    while (i >= evaluationIndex - grace && i >= 0 && days[i] && days[i].contributionCount === 0) {
+    while (
+      i >= evaluationIndex - grace &&
+      i >= 0 &&
+      uniqueDays[i] &&
+      uniqueDays[i].contributionCount === 0
+    ) {
       i--;
     }
-    while (i >= 0 && days[i] && days[i].contributionCount > 0) {
+    while (i >= 0 && uniqueDays[i] && uniqueDays[i].contributionCount > 0) {
       currentStreak++;
       i--;
     }
@@ -214,7 +226,7 @@ export function calculateStreak(
     currentStreak = 0;
   }
 
-  const todayDate = days[todayIndex]?.date ?? localTodayStr;
+  const todayDate = uniqueDays[todayIndex]?.date ?? localTodayStr;
 
   return {
     currentStreak,
