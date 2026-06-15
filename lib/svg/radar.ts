@@ -1,7 +1,8 @@
 // lib/svg/radar.ts
 
 import type { BadgeParams, ContributionCalendar, StreakStats } from '../../types';
-import { deterministicRandom, escapeXML, truncateUsername } from './generator';
+import { deterministicRandom, truncateUsername } from './generator';
+import { sanitizeHexColor, escapeXML } from './sanitizer';
 import { calculateWrappedStats, calculateMonthlyStats } from '../calculate';
 import {
   RADAR_SVG_WIDTH,

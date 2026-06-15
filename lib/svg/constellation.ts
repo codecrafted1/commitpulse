@@ -1,7 +1,8 @@
 // lib/svg/constellation.ts
 
 import type { BadgeParams, ContributionCalendar, StreakStats } from '../../types';
-import { deterministicRandom, escapeXML, truncateUsername } from './generator';
+import { deterministicRandom, truncateUsername } from './generator';
+import { escapeXML } from './sanitizer';
 import {
   CONSTELLATION_SVG_WIDTH,
   CONSTELLATION_SVG_HEIGHT,

@@ -20,6 +20,7 @@ import {
   getLuminance,
   parseGradientStops,
   getGradientCoordinates,
+  escapeXML,
 } from './sanitizer';
 
 import { GRID_ORIGIN_X, GRID_ORIGIN_Y, TILE_HEIGHT_HALF, TILE_WIDTH_HALF } from './layoutConstants';
@@ -100,15 +101,6 @@ type Scaler = (n: number) => number;
 
 function createScaler(sf: number): Scaler {
   return (n: number): number => Math.round(n * sf);
-}
-
-export function escapeXML(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 export function particleCount(count?: number | null): number {
@@ -1089,7 +1081,7 @@ export function generateMonthlySVG(stats: MonthlyStats, params: BadgeParams): st
 
   <rect width="${width}" height="${height}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bgFill}" />
 
-  <text x="20" y="40" class="title">${stats.currentMonthName.toUpperCase()}</text>
+  <text x="20" y="40" class="title">${escapeXML(stats.currentMonthName.toUpperCase())}</text>
   <text x="20" y="85" class="stats">${stats.currentMonthTotal}</text>
   <text x="20" y="105" class="label">${commitsLabel}</text>
 
@@ -1418,7 +1410,7 @@ function generateAutoThemeMonthlySVG(stats: MonthlyStats, params: BadgeParams): 
 
   <rect width="${width}" height="${height}" rx="${radius}" ${params.hideBackground ? 'fill="transparent"' : 'class="cp-bg-fill"'} />
 
-  <text x="20" y="40" class="title">${stats.currentMonthName.toUpperCase()}</text>
+  <text x="20" y="40" class="title">${escapeXML(stats.currentMonthName.toUpperCase())}</text>
   <text x="20" y="85" class="stats">${stats.currentMonthTotal}</text>
   <text x="20" y="105" class="label">${commitsLabel}</text>
 
