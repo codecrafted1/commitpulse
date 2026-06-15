@@ -2,6 +2,7 @@
 
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
+import { Resvg } from '@resvg/resvg-js';
 import { fetchGitHubContributions, getOrgDashboardData, getCircuitTelemetry } from '@/lib/github';
 import {
   calculateStreak,
@@ -564,6 +565,24 @@ export async function GET(request: Request) {
           },
         });
       }
+    }
+
+    if (format === 'png') {
+      const resvg = new Resvg(svg, {
+        background: 'transparent',
+        fitTo: { mode: 'original' },
+      });
+      const pngBuffer = resvg.render().asPng();
+
+      return new NextResponse(pngBuffer, {
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': cacheControl,
+          'X-CommitPulse-Grace-Applied': String(grace),
+          ETag: weakEtag,
+          'X-Cache-Status': shouldBypassCache ? `BYPASS, fetched=${new Date().toISOString()}` : 'HIT',
+        },
+      });
     }
 
     return new NextResponse(svg, {
