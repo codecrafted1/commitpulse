@@ -33,6 +33,7 @@ import { getClientIp } from '@/utils/getClientIp';
 import { quotaMonitor } from '@/services/github/quota-monitor';
 import { refreshPolicy } from '@/services/github/refresh-policy';
 import { refreshRateLimiter } from '@/services/github/refresh-rate-limiter';
+import { logger } from '@/lib/logger';
 
 const VALIDATION_CACHE_MAX = 256;
 const validationCache = new Map<string, ReturnType<typeof streakParamsSchema.safeParse>>();
@@ -748,7 +749,10 @@ function buildErrorResponse(error: unknown, parseResult: ParseResult): NextRespo
   }
 
   // 4. Return a 500 Internal Server Error for real crashes
-  console.error('[streak] Unhandled error:', message);
+  logger.error('Unhandled error', {
+    source: 'streak',
+    message,
+  });
 
   const errorSvg = buildInlineErrorSVG('Something went wrong. Please try again later.');
 
