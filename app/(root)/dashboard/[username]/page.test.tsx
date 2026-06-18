@@ -147,6 +147,7 @@ describe('DashboardPage', () => {
     popularRepos: [],
     pinnedRepos: [],
     starredRepos: [],
+    deployments: [],
     hallOfFame: [],
   };
 

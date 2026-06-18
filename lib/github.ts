@@ -24,6 +24,7 @@ interface GitHubRepo {
   pushed_at?: string;
   owner?: { login: string };
   created_at?: string;
+  homepage?: string | null;
 }
 
 const MAX_RETRIES = 3;
@@ -490,6 +491,8 @@ function sanitizeRepo(repo: GitHubRepo): GitHubRepo {
     updated_at: repo.updated_at,
     pushed_at: repo.pushed_at,
     created_at: repo.created_at,
+    owner: repo.owner,
+    homepage: repo.homepage,
   };
 }
 
@@ -1668,6 +1671,180 @@ async function fetchStarredRepos(username: string, token?: string): Promise<Popu
   }
 }
 
+/* ==========================================================================
+ * PRODUCTION DEPLOYMENTS — CI/CD shipping velocity tracker
+ * ========================================================================== */
+
+interface GitHubWorkflowRun {
+  status: string; // 'completed' | 'in_progress' | 'queued' | ...
+  conclusion: string | null; // 'success' | 'failure' | 'cancelled' | null
+  name: string | null;
+  created_at: string;
+}
+
+interface GitHubDeployment {
+  id: number;
+  environment: string;
+  created_at: string;
+}
+
+interface GitHubDeploymentStatus {
+  state: string; // 'success' | 'failure' | 'error' | 'pending' | ...
+  environment_url: string | null;
+  created_at: string;
+}
+
+function mapConclusionToStatus(
+  status: string,
+  conclusion: string | null
+): import('../types/dashboard').WorkflowStatus {
+  if (status === 'in_progress' || status === 'queued' || status === 'waiting') {
+    return 'in_progress';
+  }
+  if (conclusion === 'success') return 'success';
+  if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'cancelled') {
+    return 'failure';
+  }
+  return 'unknown';
+}
+
+/** Fetch the most recent workflow run for a single repo (used for the status badge). */
+async function fetchLatestWorkflowRun(
+  owner: string,
+  repo: string
+): Promise<GitHubWorkflowRun | null> {
+  try {
+    const res = await fetchWithRetry(
+      `${GITHUB_REST_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?per_page=1`,
+      {
+        headers: getHeaders(),
+        cache: 'no-store',
+      },
+      0,
+      REST_TIMEOUT_MS
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const run = data?.workflow_runs?.[0];
+    return run ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch the most recent deployment + its latest status for a single repo. */
+async function fetchLatestDeployment(
+  owner: string,
+  repo: string
+): Promise<{
+  deployment: GitHubDeployment;
+  deploymentStatus: GitHubDeploymentStatus | null;
+} | null> {
+  try {
+    const res = await fetchWithRetry(
+      `${GITHUB_REST_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/deployments?per_page=1&environment=production`,
+      {
+        headers: getHeaders(),
+        cache: 'no-store',
+      },
+      0,
+      REST_TIMEOUT_MS
+    );
+    if (!res.ok) return null;
+    const deployments = (await res.json()) as GitHubDeployment[];
+    const deployment = deployments?.[0];
+    if (!deployment) return null;
+
+    const statusRes = await fetchWithRetry(
+      `${GITHUB_REST_URL}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/deployments/${deployment.id}/statuses?per_page=1`,
+      {
+        headers: getHeaders(),
+        cache: 'no-store',
+      },
+      0,
+      REST_TIMEOUT_MS
+    );
+    const statuses = statusRes.ok ? ((await statusRes.json()) as GitHubDeploymentStatus[]) : [];
+    return { deployment, deploymentStatus: statuses?.[0] ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds the "Production Deployments" card data for up to `limit` of the user's
+ * most-recently-pushed repositories. Combines GitHub Actions workflow status
+ * (for the badge) with the Deployments API (for the live URL + timestamp).
+ * Repos with neither a deployment nor a workflow run are skipped — only repos
+ * that are actually shipping show up here.
+ */
+async function fetchDeploymentTrackerData(
+  username: string,
+  reposData: GitHubRepo[],
+  limit = 3
+): Promise<import('../types/dashboard').DeploymentData[]> {
+  // Only consider non-fork repos, most-recently-pushed first (reposData is
+  // already sorted by `pushed` from fetchUserRepos). Check a slightly larger
+  // candidate pool than `limit` since some repos won't have any deployments.
+  const candidates = reposData.filter((r) => !r.fork).slice(0, limit * 4);
+  if (candidates.length === 0) return [];
+
+  const results = await Promise.all(
+    candidates.map(async (repo) => {
+      const owner = repo.owner?.login || username;
+      const [workflowRun, deploymentInfo] = await Promise.all([
+        fetchLatestWorkflowRun(owner, repo.name),
+        fetchLatestDeployment(owner, repo.name),
+      ]);
+
+      // Skip repos with no shipping signal at all
+      if (!workflowRun && !deploymentInfo) return null;
+
+      const liveUrl = deploymentInfo?.deploymentStatus?.environment_url || repo.homepage || null;
+
+      const status = workflowRun
+        ? mapConclusionToStatus(workflowRun.status, workflowRun.conclusion)
+        : deploymentInfo?.deploymentStatus
+          ? deploymentInfo.deploymentStatus.state === 'success'
+            ? 'success'
+            : deploymentInfo.deploymentStatus.state === 'failure' ||
+                deploymentInfo.deploymentStatus.state === 'error'
+              ? 'failure'
+              : deploymentInfo.deploymentStatus.state === 'pending' ||
+                  deploymentInfo.deploymentStatus.state === 'in_progress'
+                ? 'in_progress'
+                : 'unknown'
+          : 'unknown';
+
+      const deployedAt =
+        deploymentInfo?.deploymentStatus?.created_at ||
+        deploymentInfo?.deployment.created_at ||
+        workflowRun?.created_at ||
+        null;
+
+      const deployment: import('../types/dashboard').DeploymentData = {
+        repoName: repo.name,
+        repoUrl: `https://github.com/${owner}/${repo.name}`,
+        liveUrl,
+        status,
+        deployedAt,
+        environment: deploymentInfo?.deployment.environment || 'production',
+        workflowName: workflowRun?.name || null,
+      };
+      return deployment;
+    })
+  );
+
+  return results
+    .filter((d): d is import('../types/dashboard').DeploymentData => d !== null)
+    .sort((a, b) => {
+      const aTime = a.deployedAt ? new Date(a.deployedAt).getTime() : 0;
+      const bTime = b.deployedAt ? new Date(b.deployedAt).getTime() : 0;
+      return bTime - aTime;
+    })
+    .slice(0, limit);
+}
+
 export async function getFullDashboardData(username: string, options: FetchOptions = {}) {
   const [
     profileResult,
@@ -1710,6 +1887,8 @@ export async function getFullDashboardData(username: string, options: FetchOptio
   const popularRepos = popularReposResult.status === 'fulfilled' ? popularReposResult.value : [];
   const pinnedRepos = pinnedReposResult.status === 'fulfilled' ? pinnedReposResult.value : [];
   const starredRepos = starredReposResult.status === 'fulfilled' ? starredReposResult.value : [];
+
+  const deployments = await fetchDeploymentTrackerData(username, reposData).catch(() => []);
 
   const streakStats = calculateStreak(calendarData);
   const totalStars = reposData.reduce((acc, r) => acc + r.stargazers_count, 0);
@@ -2039,6 +2218,7 @@ export async function getFullDashboardData(username: string, options: FetchOptio
     popularRepos,
     pinnedRepos,
     starredRepos,
+    deployments,
     hallOfFame: finalHallOfFame,
     graphData: { nodes, links },
     lastSyncedAt: calendarData.lastSyncedAt,

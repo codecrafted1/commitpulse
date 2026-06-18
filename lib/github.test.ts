@@ -591,6 +591,7 @@ describe('fetchUserRepos', () => {
           id: 12345,
           private: false,
           owner: { login: 'octocat' },
+          homepage: 'https://some-repo.vercel.app',
         },
       ])
     );
@@ -601,7 +602,11 @@ describe('fetchUserRepos', () => {
     expect(result[0].language).toBe('TypeScript');
     expect(result[0].id).toBeUndefined();
     expect(result[0].private).toBeUndefined();
-    expect(result[0].owner).toBeUndefined();
+    // owner and homepage are intentionally kept — required for the
+    // Production Deployments feature to resolve {owner}/{repo} paths
+    // and fall back to a configured live URL.
+    expect(result[0].owner).toEqual({ login: 'octocat' });
+    expect(result[0].homepage).toBe('https://some-repo.vercel.app');
   });
 
   it('returns a full three-repo payload with the expected star counts and languages', async () => {
