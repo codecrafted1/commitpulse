@@ -1277,7 +1277,10 @@ export async function fetchOrgMembers(orgName: string, userToken?: string): Prom
         cache: 'no-store',
       }
     );
-    if (!res.ok) throw new Error(`Failed to fetch members for org ${orgName}`);
+    if (!res.ok) {
+      throwIfRateLimited(res);
+      throw new Error(`Failed to fetch members for org ${orgName}`);
+    }
     const members = (await res.json()) as { login: string }[];
     if (members.length === 0) break;
 
