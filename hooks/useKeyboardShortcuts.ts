@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 
 const SHORTCUT_ROUTES: Record<string, string> = {
   d: '/',
@@ -23,6 +24,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 export function useKeyboardShortcuts() {
+  const router = useRouter();
   const waitingForSecondKey = useRef(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -59,7 +61,7 @@ export function useKeyboardShortcuts() {
 
       if (route) {
         event.preventDefault();
-        window.location.assign(route);
+        router.push(route);
       }
 
       resetShortcut();
@@ -71,5 +73,5 @@ export function useKeyboardShortcuts() {
       resetShortcut();
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [router]);
 }
