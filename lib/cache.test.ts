@@ -957,14 +957,12 @@ describe('DistributedCache', () => {
       await new Promise((r) => setImmediate(r));
 
       // While pending, localLocks should have it
-      // @ts-expect-error - testing private property
       expect(cache['localLocks'].has('test-key')).toBe(true);
 
       resolvePromise!('success');
       await p;
 
       // After resolution, it should be deleted
-      // @ts-expect-error - testing private property
       expect(cache['localLocks'].has('test-key')).toBe(false);
       cache.destroy();
     });
@@ -1008,19 +1006,17 @@ describe('DistributedCache', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // @ts-expect-error - testing private property
+      // While pending, localLocks should have it
       expect(cache['localLocks'].has('hang-key')).toBe(true);
 
       // Advance by 30 seconds - should still be locked
       vi.advanceTimersByTime(30000);
-      // @ts-expect-error - testing private property
       expect(cache['localLocks'].has('hang-key')).toBe(true);
 
       // Advance past 60 seconds
       vi.advanceTimersByTime(31000);
 
       // Lock should have been forcefully evicted
-      // @ts-expect-error - testing private property
       expect(cache['localLocks'].has('hang-key')).toBe(false);
 
       // A new call should trigger loadFn again because lock was evicted
