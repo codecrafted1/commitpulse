@@ -43,6 +43,7 @@ import DeploymentTracker from './DeploymentTracker';
 import ArchitectureVisualizer from './ArchitectureVisualizer';
 import GoalTracker from './GoalTracker';
 import DeveloperJourneyTimeline from './DeveloperJourneyTimeline';
+import RepositoryContributionExplorer from './RepositoryContributionExplorer';
 
 // Define the dashboard data structure
 export interface DashboardData {
@@ -733,6 +734,13 @@ export default function DashboardClient({
               <DeveloperJourneyTimeline
                 activity={initialData.activity}
                 achievements={initialData.achievements}
+              />
+            </section>
+
+            <section>
+              <RepositoryContributionExplorer
+                repos={initialData.popularRepos}
+                username={initialData.profile.username}
               />
             </section>
           </div>
