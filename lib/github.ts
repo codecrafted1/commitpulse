@@ -983,7 +983,7 @@ async function fetchContributionsUncached(
     }
 
     logger.error('GitHub GraphQL API error', { status: res.status, body: bodyText });
-    throw new Error(`GitHub API error: status ${res.status}`);
+    throw new Error('GitHub API error');
   }
 
   const data: GitHubGraphQLResponse = await res.json();

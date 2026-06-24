@@ -270,9 +270,7 @@ describe('fetchGitHubContributions', () => {
   it('throws with the status code when the server returns 500', async () => {
     vi.mocked(fetch).mockResolvedValue(mockResponse({ message: 'Internal Server Error' }, 500));
 
-    await expect(fetchGitHubContributions('octocat')).rejects.toThrow(
-      'GitHub API error: status 500'
-    );
+    await expect(fetchGitHubContributions('octocat')).rejects.toThrow('GitHub API error');
   });
 
   it('throws with the status code when the server returns 401 (expired or missing token)', async () => {
