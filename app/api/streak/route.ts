@@ -25,6 +25,7 @@ import {
 import { generateConstellationSVG } from '@/lib/svg/constellation';
 import { generateRadarSVG } from '@/lib/svg/radar';
 import { generateDoughnutSVG } from '@/lib/svg/doughnut';
+import { optimizeSVG } from '@/lib/svg/optimizer';
 import { getSecondsUntilUTCMidnight, getSecondsUntilMidnightInTimezone } from '@/utils/time';
 import type { BadgeParams, RepoContribution, ExtendedContributionData } from '@/types';
 import { getNormalizedThemeKey, themes } from '@/lib/svg/themes';
@@ -163,6 +164,7 @@ export async function GET(request: Request) {
       theta,
       phi,
       border,
+      minify,
     } = parseResult.data;
     const normalizedView = view as
       | 'default'
@@ -579,6 +581,10 @@ export async function GET(request: Request) {
     } else {
       const stats = calculateStreak(calendar, timezone, undefined, grace);
       svg = generateSVG(stats, params, calendar);
+    }
+
+    if (minify) {
+      svg = optimizeSVG(svg);
     }
 
     const secondsToMidnight = tzParam

@@ -1872,4 +1872,32 @@ describe('GET /api/streak', () => {
       expect(body).toContain('cannot exceed 39 characters');
     });
   });
+
+  describe('minify parameter', () => {
+    it('minifies the SVG by default (minify=true)', async () => {
+      const responseDefault = await GET(makeRequest({ user: 'octocat' }));
+      expect(responseDefault.status).toBe(200);
+      const bodyDefault = await responseDefault.text();
+
+      const responseMinified = await GET(makeRequest({ user: 'octocat', minify: 'true' }));
+      expect(responseMinified.status).toBe(200);
+      const bodyMinified = await responseMinified.text();
+
+      expect(bodyDefault).toBe(bodyMinified);
+      expect(bodyMinified).not.toContain('  <rect');
+    });
+
+    it('does not minify the SVG when minify=false', async () => {
+      const responseNormal = await GET(makeRequest({ user: 'octocat', minify: 'false' }));
+      expect(responseNormal.status).toBe(200);
+      const bodyNormal = await responseNormal.text();
+
+      const responseMinified = await GET(makeRequest({ user: 'octocat', minify: 'true' }));
+      expect(responseMinified.status).toBe(200);
+      const bodyMinified = await responseMinified.text();
+
+      expect(bodyNormal.length).toBeGreaterThan(bodyMinified.length);
+      expect(bodyNormal).toContain('  <rect');
+    });
+  });
 });
