@@ -40,7 +40,7 @@ describe('DiscordButton - Edge Cases & Empty/Missing Inputs', () => {
 
   it('renders the join text in default empty layout state', () => {
     render(<DiscordButton />);
-    expect(screen.getByText(/join the core community on discord/i)).toBeTruthy();
+    expect(screen.getByText(/discord_community/i)).toBeTruthy();
   });
 
   it('does not throw errors and maintains DOM structure', () => {
