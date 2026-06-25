@@ -52,6 +52,17 @@ const themes = [
   },
 ];
 
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.ceil((p / 100) * sorted.length) - 1;
+
+  return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
+}
+
 function benchmark(): void {
   console.log('\nSVG Benchmark Results\n');
 
@@ -94,8 +105,15 @@ function benchmark(): void {
     const min = Math.min(...times);
     const max = Math.max(...times);
 
+    const p50 = percentile(times, 50);
+    const p95 = percentile(times, 95);
+    const p99 = percentile(times, 99);
+
     console.log(`Theme: ${theme.name}`);
     console.log(`Average: ${avg.toFixed(2)}ms`);
+    console.log(`P50: ${p50.toFixed(2)}ms`);
+    console.log(`P95: ${p95.toFixed(2)}ms`);
+    console.log(`P99: ${p99.toFixed(2)}ms`);
     console.log(`Min: ${min.toFixed(2)}ms`);
     console.log(`Max: ${max.toFixed(2)}ms`);
     console.log('--------------------------');
