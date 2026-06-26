@@ -53,6 +53,16 @@ const themes = [
 ];
 
 function benchmark(): void {
+  let iterations = 20;
+  const iterationsArg = process.argv.find((arg) => arg.startsWith('--iterations='));
+  if (iterationsArg) {
+    const valStr = iterationsArg.split('=')[1];
+    const num = Number(valStr);
+    if (Number.isInteger(num) && num > 0) {
+      iterations = num;
+    }
+  }
+
   console.log('\nSVG Benchmark Results\n');
 
   for (const theme of themes) {
@@ -70,7 +80,7 @@ function benchmark(): void {
       calendar
     );
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < iterations; i++) {
       const start = performance.now();
 
       generateSVG(
