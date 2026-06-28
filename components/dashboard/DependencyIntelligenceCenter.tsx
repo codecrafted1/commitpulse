@@ -1,5 +1,4 @@
 import React from 'react';
-import { Card } from '../ui/card';
 
 export function DependencyIntelligenceCenter() {
   return (
