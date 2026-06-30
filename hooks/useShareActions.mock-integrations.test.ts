@@ -3,11 +3,13 @@ import { renderHook, act } from '@testing-library/react';
 import { useShareActions } from './useShareActions';
 
 // --- MOCK BROWSER DOM LIBRARIES ---
-// Prevent JSDOM Canvas crashes during image generation
-HTMLCanvasElement.prototype.getContext = vi.fn() as any;
-HTMLCanvasElement.prototype.toBlob = vi.fn((cb: any) =>
-  cb(new Blob(['fake'], { type: 'image/png' }))
-);
+// Prevent JSDOM Canvas crashes during image generation without using 'any'
+HTMLCanvasElement.prototype.getContext = vi.fn(() => ({} as CanvasRenderingContext2D | null)) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+HTMLCanvasElement.prototype.toBlob = vi.fn((cb: (blob: Blob | null) => void) => {
+  cb(new Blob(['fake'], { type: 'image/png' }));
+}) as unknown as typeof HTMLCanvasElement.prototype.toBlob;
+
 HTMLCanvasElement.prototype.toDataURL = vi.fn(() => 'data:image/png;base64,fake');
 vi.spyOn(document, 'getElementById').mockReturnValue(document.createElement('div'));
 
@@ -25,7 +27,24 @@ Object.assign(navigator, {
     writeText: vi.fn().mockResolvedValue(true),
   },
 });
-global.ClipboardItem = vi.fn().mockImplementation((data) => data) as any;
+
+// Typed Mock for ClipboardItem to satisfy TypeScript ESLint rules
+class MockClipboardItem {
+  readonly items: Record<string, Blob>;
+  constructor(items: Record<string, Blob>) {
+    this.items = items;
+  }
+
+  get types(): string[] {
+    return Object.keys(this.items);
+  }
+
+  async getType(type: string): Promise<Blob | undefined> {
+    return this.items[type];
+  }
+}
+(global as unknown as { ClipboardItem?: unknown }).ClipboardItem = MockClipboardItem;
+
 global.URL.createObjectURL = vi.fn().mockReturnValue('blob:fake-url');
 global.URL.revokeObjectURL = vi.fn();
 vi.spyOn(window, 'open').mockImplementation(() => null);
@@ -46,7 +65,7 @@ interface MockExportData {
 
 describe('useShareActions Asynchronous Layer & Cache Mocking', () => {
   const mockUsername = 'test_user';
-
+  
   const mockExportData: MockExportData = {
     activity: [],
     streak: { current: 5, longest: 10 },
@@ -54,7 +73,7 @@ describe('useShareActions Asynchronous Layer & Cache Mocking', () => {
     stats: { currentStreak: 5, peakStreak: 10, totalContributions: 100 },
     languages: [],
   };
-
+  
   const mockOnClose = vi.fn();
 
   beforeEach(() => {
@@ -67,11 +86,11 @@ describe('useShareActions Asynchronous Layer & Cache Mocking', () => {
 
   it('1. mocks standard asynchronous imports and databases using stubs', async () => {
     const { result } = renderHook(() => useShareActions(mockUsername, mockExportData, mockOnClose));
-
+    
     await act(async () => {
       await result.current.handleCopyLink?.().catch(() => {});
     });
-
+    
     // Validates the component resolved successfully using the mocked DOM/Network environment
     expect(result.current).toBeDefined();
   });
@@ -97,11 +116,11 @@ describe('useShareActions Asynchronous Layer & Cache Mocking', () => {
     const { result } = renderHook(() => useShareActions(mockUsername, mockExportData, mockOnClose));
 
     // Trigger action twice to simulate initial fetch and subsequent cache hit
-    await act(async () => {
-      await result.current.handleDownloadPNG?.().catch(() => {});
+    await act(async () => { 
+      await result.current.handleDownloadPNG?.().catch(() => {}); 
     });
-    await act(async () => {
-      await result.current.handleDownloadPNG?.().catch(() => {});
+    await act(async () => { 
+      await result.current.handleDownloadPNG?.().catch(() => {}); 
     });
 
     // Verify the hook processes the cache hit internally without errors or crashes
