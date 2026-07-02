@@ -5,16 +5,19 @@ import Leaderboard, { type Contributor } from './Leaderboard';
 
 vi.mock('next/image', () => ({
   default: ({ alt = '', ...props }: ComponentProps<'img'>) => (
-    // eslint-disable-next-line @next/next/no-img-element
+    /* eslint-disable @next/next/no-img-element */
     <img alt={alt} {...props} />
   ),
 }));
 
 vi.mock('framer-motion', () => ({
   motion: {
-    div: ({ children, ...props }: ComponentProps<'div'> & { children?: ReactNode }) => (
-      <div {...props}>{children}</div>
-    ),
+    div: ({
+      children,
+      ...props
+    }: ComponentProps<'div'> & {
+      children?: ReactNode;
+    }) => <div {...props}>{children}</div>,
   },
 }));
 

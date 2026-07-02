@@ -5,6 +5,7 @@ import { Search, X, ExternalLink } from 'lucide-react';
 import { SOCIALS, SOCIAL_CATEGORIES } from '../../data/socials';
 import { SectionCard, FieldLabel } from '../SectionCard';
 import type { Social } from '../../types';
+import Image from 'next/image';
 
 interface SocialsSectionProps {
   selected: string[];
@@ -16,17 +17,13 @@ interface SocialsSectionProps {
 function SocialIcon({ social, isDark }: { social: Social; isDark: boolean }) {
   const filterClass = social.type === 'simpleicon' && isDark ? 'invert brightness-200' : '';
   return (
-    <img
+    <Image
       src={social.iconUrl}
       alt={social.name}
       title={social.name}
       width={20}
       height={20}
-      loading="lazy"
       className={`w-5 h-5 object-contain flex-shrink-0 ${filterClass}`}
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = 'none';
-      }}
     />
   );
 }
@@ -37,6 +34,8 @@ export function SocialsSection({
   onSelectedChange,
   onLinkChange,
 }: SocialsSectionProps) {
+  const safeSelected = Array.isArray(selected) ? selected : [];
+  const safeSocialLinks = socialLinks || {};
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [activeTab, setActiveTab] = useState<'pick' | 'links'>('pick');
@@ -60,30 +59,38 @@ export function SocialsSection({
   }, [search, activeCategory]);
 
   const toggle = (id: string) => {
-    if (selected.includes(id)) {
-      onSelectedChange(selected.filter((s) => s !== id));
+    if (safeSelected.includes(id)) {
+      onSelectedChange(safeSelected.filter((s) => s !== id));
     } else {
-      onSelectedChange([...selected, id]);
+      onSelectedChange([...safeSelected, id]);
     }
   };
 
-  const filledCount = selected.filter((id) => socialLinks[id]?.trim()).length;
+  const filledCount = safeSelected.filter((id) => safeSocialLinks[id]?.trim()).length;
 
   return (
-    <div id="Socials-section">
+    <div id="socials-section">
       <SectionCard
         title="Socials"
         description="Add links to your profiles"
-        badge={selected.length}
+        badge={safeSelected.length}
         defaultOpen
       >
-        <div className="flex rounded-xl bg-gray-100 dark:bg-white/5 p-1 mb-4 gap-1">
+        <div
+          role="tablist"
+          aria-label="Socials settings tabs"
+          className="flex rounded-xl bg-gray-100 dark:bg-white/5 p-1 mb-4 gap-1"
+        >
           {(['pick', 'links'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
+              role="tab"
+              id={`tab-social-${tab}`}
+              aria-selected={activeTab === tab}
+              aria-controls={`panel-social-${tab}`}
               onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors capitalize ${
+              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50 ${
                 activeTab === tab
                   ? 'bg-white dark:bg-white/10 text-gray-900 dark:text-white shadow-sm'
                   : 'text-gray-500 dark:text-white/40 hover:text-gray-700 dark:hover:text-white/60'
@@ -97,7 +104,7 @@ export function SocialsSection({
         </div>
 
         {activeTab === 'pick' && (
-          <>
+          <div role="tabpanel" id="panel-social-pick" aria-labelledby="tab-social-pick">
             <div className="relative mb-3">
               <Search
                 size={14}
@@ -138,10 +145,10 @@ export function SocialsSection({
               ))}
             </div>
 
-            {selected.length > 0 && (
+            {safeSelected.length > 0 && (
               <div className="mb-4">
                 <div className="flex items-center justify-between mb-2">
-                  <FieldLabel>Selected ({selected.length})</FieldLabel>
+                  <FieldLabel>Selected ({safeSelected.length})</FieldLabel>
                   <button
                     type="button"
                     onClick={() => onSelectedChange([])}
@@ -151,10 +158,10 @@ export function SocialsSection({
                   </button>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {selected.map((id) => {
+                  {safeSelected.map((id) => {
                     const social = SOCIALS.find((s) => s.id === id);
                     if (!social) return null;
-                    const hasLink = !!socialLinks[id]?.trim();
+                    const hasLink = !!safeSocialLinks[id]?.trim();
                     return (
                       <div
                         key={id}
@@ -164,15 +171,12 @@ export function SocialsSection({
                             : 'bg-amber-500/10 border-amber-500/20 text-amber-700 dark:text-amber-300'
                         }`}
                       >
-                        <img
+                        <Image
                           src={social.iconUrl}
                           alt=""
                           width={12}
                           height={12}
                           className={`w-3 h-3 object-contain ${social.type === 'simpleicon' && isDark ? 'invert brightness-200' : ''}`}
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).style.display = 'none';
-                          }}
                         />
                         <span>{social.name}</span>
                         {!hasLink && <span className="text-[9px] opacity-60">(no link)</span>}
@@ -200,7 +204,7 @@ export function SocialsSection({
             <FieldLabel>{filtered.length} platforms</FieldLabel>
             <div className="grid grid-cols-1 gap-1 max-h-72 overflow-y-auto pr-1">
               {filtered.map((social) => {
-                const isSelected = selected.includes(social.id);
+                const isSelected = safeSelected.includes(social.id);
                 return (
                   <button
                     key={social.id}
@@ -246,12 +250,17 @@ export function SocialsSection({
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
 
         {activeTab === 'links' && (
-          <div className="space-y-3">
-            {selected.length === 0 ? (
+          <div
+            role="tabpanel"
+            id="panel-social-links"
+            aria-labelledby="tab-social-links"
+            className="space-y-3"
+          >
+            {safeSelected.length === 0 ? (
               <div className="py-8 text-center">
                 <p className="text-sm text-gray-400 dark:text-white/30 mb-3">
                   No platforms selected yet
@@ -269,28 +278,30 @@ export function SocialsSection({
                 <p className="text-xs text-gray-500 dark:text-white/40 mb-3">
                   Platforms without a URL will be excluded from the README.
                 </p>
-                {selected.map((id) => {
+                {safeSelected.map((id) => {
                   const social = SOCIALS.find((s) => s.id === id);
                   if (!social) return null;
-                  const val = socialLinks[id] ?? '';
+                  const val = safeSocialLinks[id] ?? '';
                   const hasLink = !!val.trim();
 
                   return (
                     <div key={id}>
                       <div className="flex items-center gap-2 mb-1.5">
-                        <img
+                        <Image
                           src={social.iconUrl}
                           alt=""
                           width={14}
                           height={14}
-                          className={`w-3.5 h-3.5 object-contain flex-shrink-0 ${social.type === 'simpleicon' && isDark ? 'invert brightness-200' : ''}`}
-                          onError={(e) => {
-                            (e.currentTarget as HTMLImageElement).style.display = 'none';
-                          }}
+                          className={`w-3.5 h-3.5 object-contain flex-shrink-0 ${
+                            social.type === 'simpleicon' && isDark ? 'invert brightness-200' : ''
+                          }`}
                         />
-                        <span className="text-xs font-semibold text-gray-700 dark:text-white/70">
+                        <label
+                          htmlFor={`social-link-${id}`}
+                          className="text-xs font-semibold text-gray-700 dark:text-white/70 cursor-pointer"
+                        >
                           {social.name}
-                        </span>
+                        </label>
                         {hasLink && (
                           <a
                             href={
@@ -307,6 +318,7 @@ export function SocialsSection({
                       </div>
                       <div className="relative">
                         <input
+                          id={`social-link-${id}`}
                           type={social.id === 'email' ? 'email' : 'url'}
                           value={val}
                           onChange={(e) => onLinkChange(id, e.target.value)}
