@@ -10,7 +10,7 @@ import type {
 import { getLabels, type BadgeLabels } from '../i18n/badgeLabels';
 import { AUTO_THEME_DARK, AUTO_THEME_LIGHT, themes } from './themes';
 import { getTowerAnimationCSS } from './animations';
-import { computeTowers, type TowerData } from './layout';
+import { computeTowers, computeTowerHeight, type TowerData } from './layout';
 import { LANGUAGE_COLORS } from './languageColors';
 import {
   sanitizeFont,
@@ -20,32 +20,34 @@ import {
   getLuminance,
   parseGradientStops,
   getGradientCoordinates,
+  escapeXML,
+  sanitizeSpeed,
+  sanitizeCustomText,
 } from './sanitizer';
 
-import { GRID_ORIGIN_X, GRID_ORIGIN_Y, TILE_HEIGHT_HALF, TILE_WIDTH_HALF } from './layoutConstants';
+import {
+  GRID_ORIGIN_X,
+  GRID_ORIGIN_Y,
+  TILE_HEIGHT_HALF,
+  TILE_WIDTH_HALF,
+  MAX_LOG_HEIGHT,
+  MAX_LINEAR_HEIGHT,
+  MAX_SQRT_HEIGHT,
+} from './layoutConstants';
 
-import { SVG_WIDTH, SVG_HEIGHT } from './generatorConstants';
+import { SVG_WIDTH, SVG_HEIGHT, MAX_USERNAME_DISPLAY_LENGTH } from './generatorConstants';
 
 const FONT_MAP = {
-  // ── Pre-existing entries ────────────────────────────────────────────────
   jetbrains: '"JetBrains Mono", monospace',
   fira: '"Fira Code", monospace',
   roboto: '"Roboto", sans-serif',
-
-  // ── Previously missing — both fonts are in the unconditional @import ───
-  // Without these entries, passing ?font=syncopate or ?font=spacegrotesk
-  // incorrectly triggers a duplicate dynamic Google Fonts fetch.
   syncopate: '"Syncopate", sans-serif',
   spacegrotesk: '"Space Grotesk", sans-serif',
-  'space grotesk': '"Space Grotesk", sans-serif', // handles spaced user input
-
-  // ── Aliases for common variations ───────────────────────────────────────
-  firacode: '"Fira Code", monospace', // alias: fira is the canonical key
-  'jetbrains mono': '"JetBrains Mono", monospace', // handles spaced user input
-
-  // ── Legacy keys for backward compatibility ──────────────────────────────
+  'space grotesk': '"Space Grotesk", sans-serif',
+  firacode: '"Fira Code", monospace',
+  'jetbrains mono': '"JetBrains Mono", monospace',
   inter: '"Inter", sans-serif',
-  space: '"Space Grotesk", sans-serif', // old key for spacegrotesk
+  space: '"Space Grotesk", sans-serif',
 } as const;
 
 export function resolveFont(sanitizedFont?: string | null): string | null {
@@ -64,7 +66,6 @@ function isBundledFont(sanitizedFont?: string | null): boolean {
   return fontKey in FONT_MAP && fontKey !== 'inter';
 }
 
-// helpers
 export function getSizeScale(size?: 'small' | 'medium' | 'large') {
   if (size === 'small') return 400 / SVG_WIDTH;
   if (size === 'large') return 800 / SVG_WIDTH;
@@ -72,17 +73,36 @@ export function getSizeScale(size?: 'small' | 'medium' | 'large') {
 }
 
 export function truncateUsername(username: string): string {
-  return username.length > 12 ? `${username.slice(0, 12)}...` : username;
+  return username.length > MAX_USERNAME_DISPLAY_LENGTH
+    ? `${username.slice(0, MAX_USERNAME_DISPLAY_LENGTH)}...`
+    : username;
+}
+
+export function getUsernameFontSize(username: string): number {
+  const len = username.length;
+  if (len <= 12) return 18;
+  return Math.max(10, 18 - (len - 12) * 0.5);
 }
 
 export function deterministicRandom(seed?: string | null): number {
   const safeSeed = seed || '';
-  let hash = 2166136261;
+  let h1 = 0xdeadbeef;
   for (let i = 0; i < safeSeed.length; i++) {
-    hash ^= safeSeed.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
+    let k = safeSeed.charCodeAt(i) & 0xff;
+    k = Math.imul(k, 0xcc9e2d51);
+    k = (k << 15) | (k >>> 17);
+    k = Math.imul(k, 0x1b873593);
+    h1 ^= k;
+    h1 = (h1 << 13) | (h1 >>> 19);
+    h1 = Math.imul(h1, 5) + 0xe6546b64;
   }
-  return (hash >>> 0) / 4294967296;
+  h1 ^= safeSeed.length;
+  h1 ^= h1 >>> 16;
+  h1 = Math.imul(h1, 0x85ebca6b);
+  h1 ^= h1 >>> 13;
+  h1 = Math.imul(h1, 0xc2b2ae35);
+  h1 ^= h1 >>> 16;
+  return (h1 >>> 0) / 4294967296;
 }
 
 function scaleTowerData(towerData: TowerData[], sf: number): TowerData[] {
@@ -101,15 +121,6 @@ function createScaler(sf: number): Scaler {
   return (n: number): number => Math.round(n * sf);
 }
 
-export function escapeXML(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 export function particleCount(count?: number | null): number {
   if (typeof count !== 'number' || count <= 0 || Number.isNaN(count)) return 0;
   return Math.min(5, Math.max(3, Math.floor(count / 4)));
@@ -121,12 +132,6 @@ export interface TowerPaths {
   top: string;
 }
 
-/**
- * Builds the SVG path strings for the three faces of an isometric 3D tower.
- *
- * @param h - The height of the tower.
- * @param scale - Optional scale factor (defaults to 1, which represents the standard 16x10 grid).
- */
 export function buildTowerPaths(h: number, scale: number = 1): TowerPaths {
   const tileHalfWidth = 16 * scale;
   const tileHalfHeight = 10 * scale;
@@ -161,17 +166,17 @@ function generateParticles(
     const fillAttr = autoTheme ? 'class="cp-accent-fill"' : `fill="${color}"`;
 
     particles += `
-      <circle ${fillAttr} cx="${x + offsetX}" cy="${y - height}" r="${1.5 * sf}" opacity="1" pointer-events="none">
-      ${
-        animate
-          ? `
-        <animate attributeName="cy" from="${y - height}" to="${y - height - Math.round(20 * sf)}" dur="1.5s" begin="${delay}s" repeatCount="indefinite" />
-        <animate attributeName="opacity" from="1" to="0" dur="1.5s" begin="${delay}s" repeatCount="indefinite" />
-      `
-          : ''
-      }
-      </circle>
-    `;
+        <circle ${fillAttr} cx="${x + offsetX}" cy="${y - height}" r="${1.5 * sf}" opacity="1" pointer-events="none">
+        ${
+          animate
+            ? `
+          <animate attributeName="cy" from="${y - height}" to="${y - height - Math.round(20 * sf)}" dur="1.5s" begin="${delay}s" repeatCount="indefinite" />
+          <animate attributeName="opacity" from="1" to="0" dur="1.5s" begin="${delay}s" repeatCount="indefinite" />
+        `
+            : ''
+        }
+        </circle>
+      `;
   }
   return `<g class="heat-particles" pointer-events="none">${particles}</g>`;
 }
@@ -182,8 +187,6 @@ export function getInteractiveTowerCSS(accentColorExpr: string): string {
   .interactive-tower:hover { transform: translateY(-4px); filter: brightness(1.2) drop-shadow(0 4px 8px ${accentColorExpr}); }
   `;
 }
-
-// ── Section helpers for generateSVG ──────────────────────────────────────
 
 function renderHeader(
   safeUser: string,
@@ -203,24 +206,14 @@ function renderHeader(
   ${renderDefs(sf, params)}`;
 }
 
-/**
- * Generates custom SVG gradient definitions from gradient_stops and gradient_dir parameters.
- * Returns an object with gradient SVG elements and the gradient ID (or empty string if invalid).
- * If custom stops are invalid or insufficient, returns { gradients: '', gradientId: '' }.
- * Also stores the gradient ID on the params object for tower rendering to use.
- */
 function generateCustomGradients(params: BadgeParams): { gradients: string; gradientId: string } {
   const stops = parseGradientStops(params.gradient_stops);
 
-  // Require at least 2 valid colors for custom gradient
   if (stops.length < 2) {
     return { gradients: '', gradientId: '' };
   }
 
   const coords = getGradientCoordinates(params.gradient_dir);
-
-  // Create a deterministic gradient ID based on the color stops and direction
-  // This ensures consistent output and avoids random/duplicate IDs
   const gradientSignature = `${stops.join('-')}-${params.gradient_dir || 'vertical'}`;
   const gradientId = `custom-grad-${deterministicRandom(gradientSignature)
     .toString()
@@ -228,36 +221,30 @@ function generateCustomGradients(params: BadgeParams): { gradients: string; grad
 
   let gradients = '';
 
-  // Generate 4 gradient definitions (one for each intensity level)
-  // Each uses the same color stops but with different opacity progression
   for (let i = 0; i < 4; i++) {
     const level = i + 1;
     const levelId = `${gradientId}-level-${level}`;
 
-    // Build the stop elements
     let stopElements = '';
     const stopCount = stops.length;
 
     stops.forEach((color, stopIdx) => {
       const offset = (stopIdx / (stopCount - 1)) * 100;
-      // Increase opacity with intensity level (0.4 to 0.8)
       const baseOpacity = 0.4 + i * 0.2;
       const stopOpacity = Math.min(1, baseOpacity + stopIdx * 0.1);
 
       const colorHex = color.startsWith('#') ? color : `#${color}`;
       stopElements += `
-        <stop offset="${offset}%" stop-color="${colorHex}" stop-opacity="${stopOpacity}" />`;
+          <stop offset="${offset}%" stop-color="${colorHex}" stop-opacity="${stopOpacity}" />`;
     });
 
     gradients += `
-      <linearGradient id="${levelId}" x1="${coords.x1}" y1="${coords.y1}" x2="${coords.x2}" y2="${coords.y2}">
+        <linearGradient id="${levelId}" x1="${coords.x1}" y1="${coords.y1}" x2="${coords.x2}" y2="${coords.y2}">
 ${stopElements}
-      </linearGradient>`;
+        </linearGradient>`;
   }
 
-  // Store the gradient ID on params for tower rendering to use
   params.__customGradientId = gradientId;
-
   return { gradients, gradientId };
 }
 
@@ -266,13 +253,10 @@ function renderDefs(sf: number, params: BadgeParams): string {
 
   let gradients = '';
   if (params.gradient) {
-    // Try to use custom gradient if gradient_stops is provided
     const result = generateCustomGradients(params);
     if (result.gradientId) {
-      // Custom gradient stops were valid and used
       gradients = result.gradients;
     } else {
-      // Fallback to default gradient behavior
       const bgStr = params.bg || '0d1117';
       const bgHex = bgStr.startsWith('#') ? bgStr : `#${bgStr}`;
 
@@ -280,10 +264,10 @@ function renderDefs(sf: number, params: BadgeParams): string {
         for (let i = 0; i < 4; i++) {
           const level = i + 1;
           gradients += `
-      <linearGradient id="tower-grad-level-${level}" x1="0" y1="1" x2="0" y2="0">
-        <stop offset="0%" stop-color="var(--cp-bg)" stop-opacity="0.1" />
-        <stop offset="100%" stop-color="var(--cp-accent)" stop-opacity="${0.4 + i * 0.2}" />
-      </linearGradient>`;
+        <linearGradient id="tower-grad-level-${level}" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%" stop-color="var(--cp-bg)" stop-opacity="0.1" />
+          <stop offset="100%" stop-color="var(--cp-accent)" stop-opacity="${0.4 + i * 0.2}" />
+        </linearGradient>`;
         }
       } else {
         const accent = params.accent;
@@ -300,10 +284,10 @@ function renderDefs(sf: number, params: BadgeParams): string {
         colors.forEach((c, idx) => {
           const level = idx + 1;
           gradients += `
-      <linearGradient id="tower-grad-level-${level}" x1="0" y1="1" x2="0" y2="0">
-        <stop offset="0%" stop-color="${bgHex}" stop-opacity="0.1" />
-        <stop offset="100%" stop-color="${c}" stop-opacity="${0.4 + idx * 0.2}" />
-      </linearGradient>`;
+        <linearGradient id="tower-grad-level-${level}" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0%" stop-color="${bgHex}" stop-opacity="0.1" />
+          <stop offset="100%" stop-color="${c}" stop-opacity="${0.4 + idx * 0.2}" />
+        </linearGradient>`;
         });
       }
     }
@@ -336,24 +320,24 @@ function renderDefs(sf: number, params: BadgeParams): string {
       const x2 = Math.round(50 + Math.cos(angleRad) * 50) + '%';
       const y2 = Math.round(50 + Math.sin(angleRad) * 50) + '%';
       canvasGradient = `
-      <linearGradient id="canvas-gradient" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">
-        <stop offset="0%" stop-color="${bgStart}" />
-        <stop offset="100%" stop-color="${bgEnd}" />
-      </linearGradient>`;
+        <linearGradient id="canvas-gradient" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">
+          <stop offset="0%" stop-color="${bgStart}" />
+          <stop offset="100%" stop-color="${bgEnd}" />
+        </linearGradient>`;
     } else {
       canvasGradient = `
-      <radialGradient id="canvas-gradient" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-        <stop offset="0%" stop-color="${bgStart}" />
-        <stop offset="100%" stop-color="${bgEnd}" />
-      </radialGradient>`;
+        <radialGradient id="canvas-gradient" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+          <stop offset="0%" stop-color="${bgStart}" />
+          <stop offset="100%" stop-color="${bgEnd}" />
+        </radialGradient>`;
     }
   }
 
   return `<defs>
-    ${filterGlow}
-    ${gradients}
-    ${canvasGradient}
-  </defs>`;
+      ${filterGlow}
+      ${gradients}
+      ${canvasGradient}
+    </defs>`;
 }
 
 function renderStatsSection(
@@ -380,7 +364,10 @@ function renderStatsSection(
 
   <g transform="translate(${s(500)}, ${s(340 + yOffset)})" text-anchor="middle">
     <text class="label">${labels.PEAK_STREAK}</text>
-    <text y="${s(40)}" class="stats">${stats.longestStreak}</text>
+    <g>
+      <text y="${s(40)}" class="stats">${stats.longestStreak}</text>
+      ${getInlineMilestoneBadge(stats.longestStreak, s, Math.max(25, stats.longestStreak.toString().length * 10 + 5), 26)}
+    </g>
   </g>`;
 }
 
@@ -392,7 +379,7 @@ function renderStyle(
   accent: string,
   sf: number,
   bg: string,
-  entrance: 'rise' | 'fade' | 'slide' | 'none' = 'rise'
+  entrance: 'rise' | 'fade' | 'slide' | 'wave' | 'bounce' | 'none' = 'rise'
 ): string {
   const fs = (n: number) => Math.round(n * sf * 10) / 10;
   const isLightBg = getLuminance(bg) > 0.5;
@@ -414,6 +401,7 @@ function renderStyle(
     to { transform: translateY(var(--scan-end, ${fs(240)}px)); }
   }
   .title { font-family: ${selectedFont || '"Syncopate", sans-serif'}; fill: ${text}; font-size: ${fs(18)}px; letter-spacing: ${fs(6)}px; font-weight: 400; opacity: 0.8; }
+  .subtitle { font-family: "Roboto", sans-serif; fill: ${labelFill}; font-size: ${fs(10)}px; letter-spacing: ${fs(2)}px; font-weight: 400; opacity: ${labelOpacity - 0.1}; }
   .stats { font-family: ${statsFont}; fill: ${text}; font-size: ${fs(42)}px; font-weight: 500; letter-spacing: 0; }
   .total-val { font-family: ${statsFont}; fill: ${accent}; font-size: ${fs(24)}px; font-weight: 500; }
   .label { font-family: "Roboto", sans-serif; fill: ${labelFill}; font-size: ${fs(11)}px; font-weight: 400; letter-spacing: ${fs(2)}px; opacity: ${labelOpacity}; }
@@ -424,6 +412,8 @@ function renderStyle(
       transition: none !important;
       transform: translateY(var(--scan-start, ${fs(0)}px)) !important;
     }
+    .cp-tower animate { display: none; }
+    .interactive-tower { transition: none !important; }
   }
   .isometric-label { font-family: ${selectedFont || '"Roboto", sans-serif'}; font-size: ${fs(10)}px; font-weight: 400; letter-spacing: 1px; fill-opacity: 0.6; }
   .dimmed-tower { opacity: 0.3; }
@@ -444,7 +434,45 @@ function renderTowers(
   let towers = '';
   const opacityMultipliers = [0.4, 0.6, 0.8, 1.0];
 
-  for (const t of towerData) {
+  const theta = params.theta !== undefined ? params.theta : 45;
+  const phi = params.phi !== undefined ? params.phi : Math.asin(10 / 16) * (180 / Math.PI);
+
+  const thetaRad = (theta * Math.PI) / 180;
+  const phiRad = (phi * Math.PI) / 180;
+
+  const d = 8 * Math.sqrt(2);
+  const cosTheta = Math.cos(thetaRad);
+  const sinTheta = Math.sin(thetaRad);
+  const sinPhi = Math.sin(phiRad);
+
+  // Base tile corners relative to the center of the base (unscaled)
+  const ax = cosTheta * -d - sinTheta * -d;
+  const ay = sinTheta * sinPhi * -d + cosTheta * sinPhi * -d;
+  const bx = cosTheta * d - sinTheta * -d;
+  const by = sinTheta * sinPhi * d + cosTheta * sinPhi * -d;
+  const cx = cosTheta * d - sinTheta * d;
+  const cy = sinTheta * sinPhi * d + cosTheta * sinPhi * d;
+  const dx = cosTheta * -d - sinTheta * d;
+  const dy = sinTheta * sinPhi * -d + cosTheta * sinPhi * d;
+
+  const rnd = (num: number) => {
+    const val = Math.round(num * 10000) / 10000;
+    return val === 0 ? 0 : val;
+  };
+
+  // Scale the local offsets by sf and round to eliminate float noise
+  const ax_sf = rnd(ax * sf);
+  const ay_sf = rnd(ay * sf);
+  const bx_sf = rnd(bx * sf);
+  const by_sf = rnd(by * sf);
+  const cx_sf = rnd(cx * sf);
+  const cy_sf = rnd(cy * sf);
+  const dx_sf = rnd(dx * sf);
+  const dy_sf = rnd(dy * sf);
+
+  const sortedTowers = [...towerData].sort((a, b) => a.row + a.col - (b.row + b.col));
+
+  for (const t of sortedTowers) {
     const isGhost = t.isGhost;
     let strokeColor = '';
     let leftRightFillAttr = '';
@@ -476,7 +504,6 @@ function renderTowers(
       topFillAttr = leftRightFillAttr;
     }
 
-    // opacity scalar: clamp 0.1–1.0, applied globally to all tower faces
     let leftFaceOpacity = Math.round(t.faceOpacity.left * opacity * 100) / 100;
     let rightFaceOpacity = Math.round(t.faceOpacity.right * opacity * 100) / 100;
     let topFaceOpacity = Math.round(t.faceOpacity.top * opacity * 100) / 100;
@@ -493,7 +520,6 @@ function renderTowers(
     let finalTopFillAttr = topFillAttr;
 
     if (!isGhost && t.intensityLevel > 0 && params.gradient === true) {
-      // Use custom gradient ID if available, otherwise use default gradient ID
       const customGradId = params.__customGradientId;
       const gradId = customGradId
         ? `${customGradId}-level-${t.intensityLevel}`
@@ -540,10 +566,38 @@ function renderTowers(
     const shouldDim = params.dim_weekends && isWeekend;
     const dimAttr = shouldDim ? ' class="dimmed-tower" style="opacity: 0.3;"' : '';
 
-    const paths = buildTowerPaths(t.h, 1);
+    // Calculate dynamic 3D coordinates based on row, col, theta, phi
+    const gridX = t.row * 16 * Math.sqrt(2);
+    const gridY = t.col * 16 * Math.sqrt(2);
+
+    const x_base = cosTheta * gridX - sinTheta * gridY;
+    const y_base = sinTheta * sinPhi * gridX + cosTheta * sinPhi * gridY;
+
+    // Apply scaling factor (sf) and add origin offsets
+    const towerX = Math.round((GRID_ORIGIN_X + x_base) * sf);
+    const towerY = Math.round((GRID_ORIGIN_Y + y_base) * sf);
+
+    const hOffset = t.h;
+
+    const paths = {
+      left: `M${cx_sf} ${rnd(cy_sf - hOffset)} L${cx_sf} ${cy_sf} L${dx_sf} ${dy_sf} L${dx_sf} ${rnd(dy_sf - hOffset)} Z`,
+      right: `M${cx_sf} ${rnd(cy_sf - hOffset)} L${cx_sf} ${cy_sf} L${bx_sf} ${by_sf} L${bx_sf} ${rnd(by_sf - hOffset)} Z`,
+      top: `M${ax_sf} ${rnd(ay_sf - hOffset)} L${bx_sf} ${rnd(by_sf - hOffset)} L${cx_sf} ${rnd(cy_sf - hOffset)} L${dx_sf} ${rnd(dy_sf - hOffset)} Z`,
+    };
+
+    let shadowMarkup = '';
+    if (!isGhost && hOffset > 0) {
+      const vx = rnd(-hOffset * 0.7);
+      const vy = rnd(-hOffset * 0.35);
+      const shadowPath = `M${cx_sf} ${cy_sf} L${bx_sf} ${by_sf} L${rnd(bx_sf + vx)} ${rnd(by_sf + vy)} L${rnd(ax_sf + vx)} ${rnd(ay_sf + vy)} L${rnd(dx_sf + vx)} ${rnd(dy_sf + vy)} L${dx_sf} ${dy_sf} Z`;
+      const shadowColor = isAutoTheme ? 'var(--cp-negative, #000000)' : '#000000';
+      const shadowOpacity = parseFloat((0.15 * opacity).toFixed(2));
+      shadowMarkup = `<path d="${shadowPath}" fill="${shadowColor}" fill-opacity="${shadowOpacity}" />`;
+    }
 
     towers += `
-        <g transform="translate(${t.x}, ${t.y})"${dimAttr}>
+        <g transform="translate(${towerX}, ${towerY})"${dimAttr}>
+          ${shadowMarkup}
           <g class="cp-tower interactive-tower" data-date="${escapeXML(t.date)}" data-count="${t.contributionCount}" data-metric="${escapeXML(metric)}" style="animation-delay: ${delay}s;">
             ${animate && t.isToday ? '<animate attributeName="opacity" values="1;0.4;1" dur="1.5s" repeatCount="indefinite" />' : ''}
             <title>${escapeXML(t.tooltip)}</title>
@@ -565,9 +619,9 @@ function renderTowers(
           ? pColorResolved
           : `#${pColorResolved}`;
       let particlesMarkup = generateParticles(
-        t.x,
-        t.y,
-        t.h,
+        towerX,
+        towerY,
+        hOffset,
         t.contributionCount,
         sf,
         isAutoTheme,
@@ -589,6 +643,7 @@ function renderRadarScan(
   accentColor: string,
   autoTheme: boolean
 ): string {
+  const safeSpeed = sanitizeSpeed(speed);
   const s = createScaler(sf);
   const fillAttr = autoTheme
     ? 'class="cp-accent-fill scan-line"'
@@ -600,7 +655,7 @@ function renderRadarScan(
     height="${s(1)}"
     ${fillAttr}
     fill-opacity="0.3"
-    style="--scan-speed: ${speed}; --scan-start: ${s(0)}px; --scan-end: ${s(240)}px;"
+    style="--scan-speed: ${safeSpeed}; --scan-start: ${s(0)}px; --scan-end: ${s(240)}px;"
   />`;
 }
 
@@ -614,6 +669,7 @@ function renderFooter(
   isWinner?: boolean
 ): string {
   const s = createScaler(sf);
+  const fs = (n: number): number => Math.round(n * sf * 10) / 10;
   const statsOffset = params.label === false ? -40 : 0;
 
   // Static themes do not define the .cp-accent-fill CSS rule, so the scan line needs an
@@ -622,20 +678,33 @@ function renderFooter(
     ? 'class="cp-accent-fill scan-line"'
     : `fill="${accent}" class="cp-accent-fill scan-line"`;
 
-  const titleText = `${truncateUsername(safeUser).toUpperCase()}${isWinner ? ' 👑' : ''}${
+  const displayTitle = params.custom_title
+    ? sanitizeCustomText(params.custom_title)
+    : `${truncateUsername(safeUser).toUpperCase()}${isWinner ? ' 👑' : ''}`;
+
+  const titleText = `${displayTitle}${
     params.isOfflineFallback
       ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>'
       : ''
   }`;
+
+  const titleFontSize = getUsernameFontSize(params.custom_title || truncateUsername(safeUser));
+
+  let subtitleElement = '';
+  if (params.custom_subtitle && !params.hide_title && params.label !== false) {
+    const safeSubtitle = sanitizeCustomText(params.custom_subtitle);
+    subtitleElement = `\n  <text x="${s(300)}" y="${s(68)}" text-anchor="middle" class="subtitle">${safeSubtitle}</text>`;
+  }
 
   return `
   ${!params.hide_stats ? renderStatsSection(stats, labels, s, params, statsOffset) : ''}
 
   ${
     !params.hide_title && params.label !== false
-      ? `<text x="${s(300)}" y="${s(50)}" text-anchor="middle" class="title">${titleText}</text>`
+      ? `<text x="${s(300)}" y="${s(50)}" text-anchor="middle" class="title" font-size="${fs(titleFontSize)}" style="font-size: ${fs(titleFontSize)}px;">${titleText}</text>`
       : ''
   }
+  ${subtitleElement}
   <rect
     x="${s(100)}"
     y="${s(80 + statsOffset)}"
@@ -643,7 +712,7 @@ function renderFooter(
     height="${s(1)}"
     ${scanLineFill}
     fill-opacity="0.3"
-    style="--scan-speed: ${params.speed || '8s'}; --scan-start: ${s(0)}px; --scan-end: ${s(240)}px;"
+    style="--scan-speed: ${sanitizeSpeed(params.speed)}; --scan-start: ${s(0)}px; --scan-end: ${s(240)}px;"
   />`;
 }
 
@@ -662,11 +731,10 @@ const MONTH_NAMES = [
   'Dec',
 ];
 
-// Layout constants for 3D isometric label positioning
 const ISOMETRIC_VERTICAL_OFFSET = 20;
-
 const MONTH_LABEL_ROW_OFFSET = 7.2;
 const WEEKDAY_LABEL_COL_OFFSET = -1.2;
+
 function renderIsometricLabels(
   calendar: ContributionCalendar,
   params: BadgeParams,
@@ -693,8 +761,11 @@ function renderIsometricLabels(
       prevMonthStr = monthStr;
     }
   });
-
-  const labelColorHex = params.labelColor ? `#${params.labelColor}` : color;
+  let labelColorHex = color;
+  if (params.labelColor) {
+    const fallbackHex = color.replace(/^#/, '') || 'ffffff';
+    labelColorHex = `#${sanitizeHexColor(params.labelColor, fallbackHex)}`;
+  }
 
   monthLabels.forEach((label) => {
     const tx = s(GRID_ORIGIN_X + (label.col - MONTH_LABEL_ROW_OFFSET) * TILE_WIDTH_HALF + 8);
@@ -727,6 +798,38 @@ function renderIsometricLabels(
   });
 
   return `<g class="isometric-labels">${elements}</g>`;
+}
+
+function getInlineMilestoneBadge(
+  streak: number,
+  s: (n: number) => number,
+  cx: number,
+  cy: number
+): string {
+  let color = '';
+  let path = '';
+  if (streak >= 365) {
+    color = '#FFD700';
+    path =
+      '<path d="M12 2c0 0-4.5 4.5-4.5 8.5C7.5 13.5 10 16 12 16c2 0 4.5-2.5 4.5-5.5C16.5 6.5 12 2 12 2z" fill="currentColor"/>';
+  } else if (streak >= 100) {
+    color = '#C0C0C0';
+    path =
+      '<path d="M12 2l2.4 7.4h7.6l-6 4.6 2.3 7.4-6.3-4.8-6.3 4.8 2.3-7.4-6-4.6h7.6z" fill="currentColor"/>';
+  } else if (streak >= 30) {
+    color = '#CD7F32';
+    path =
+      '<path d="M12 2L3 6v5.5c0 5 3.8 9.6 9 10.5 5.2-.9 9-5.5 9-10.5V6l-9-4z" fill="currentColor"/>';
+  } else {
+    return '';
+  }
+  return `
+    <g transform="translate(${s(cx)}, ${s(cy)})" color="${color}" class="milestone-inline-badge">
+      <svg x="0" y="0" width="${s(14)}" height="${s(14)}" viewBox="0 0 24 24">
+        ${path}
+      </svg>
+    </g>
+  `;
 }
 
 function renderMilestoneBadges(stats: StreakStats, params: BadgeParams, sf: number): string {
@@ -768,14 +871,13 @@ function renderMilestoneBadges(stats: StreakStats, params: BadgeParams, sf: numb
   return `<g class="milestone-badges">${elements}</g>`;
 }
 
-// ── Main static-theme renderer ────────────────────────────────────────────
-
 export function generateSVG(
   stats: StreakStats,
   params: BadgeParams,
   calendar: ContributionCalendar
 ): string {
   if (params.autoTheme) return generateAutoThemeSVG(stats, params, calendar);
+  if (params.compact) return generateCompactSVG(stats, params);
 
   const animate = params.animate ?? true;
   const safeUser = escapeXML(params.user || 'GitHub User');
@@ -789,7 +891,9 @@ export function generateSVG(
 
   const text = `#${sanitizeHexColor(params.text, 'ffffff')}`;
 
-  const borderAttr = params.border ? `stroke="#${params.border}" stroke-width="2"` : '';
+  const borderAttr = params.border
+    ? `stroke="#${sanitizeHexColor(params.border, '000000')}" stroke-width="2"`
+    : '';
 
   const sanitizedFont = sanitizeFont(params.font);
   const selectedFont = resolveFont(sanitizedFont);
@@ -835,7 +939,7 @@ export function generateSVG(
   const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
   ${renderHeader(safeUser, stats, sf, params, safeId)}
   ${renderStyle(selectedFont, statsFont, googleFontsImport, text, mainAccentHex, sf, bg, params.entrance || 'rise')}
   <rect width="${W}" height="${H}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bgFill}" ${borderAttr} />
@@ -843,6 +947,52 @@ export function generateSVG(
   ${renderIsometricLabels(calendar, params, text, sf)}
   ${renderFooter(stats, params, labels, safeUser, mainAccentHex, sf)}
   ${renderMilestoneBadges(stats, params, sf)}
+</svg>`;
+}
+
+function generateCompactSVG(stats: StreakStats, params: BadgeParams): string {
+  const safeUser = escapeXML(params.user || 'GitHub User');
+  const bg = `#${sanitizeHexColor(params.bg, '0d1117')}`;
+  const text = `#${sanitizeHexColor(params.text, 'ffffff')}`;
+
+  const accentRaw = Array.isArray(params.accent)
+    ? params.accent[params.accent.length - 1]
+    : params.accent;
+  const accent = `#${sanitizeHexColor(accentRaw, '00ffaa')}`;
+
+  const borderAttr = params.border ? `stroke="#${params.border}" stroke-width="2"` : '';
+  const radius = sanitizeRadius(params.radius, 12);
+
+  const sanitizedFont = sanitizeFont(params.font);
+  const selectedFont = resolveFont(sanitizedFont);
+  const isPredefinedFont = isBundledFont(sanitizedFont);
+  const statsFont = selectedFont || '"Space Grotesk", sans-serif';
+  const googleFontUrlPart =
+    sanitizedFont && !isPredefinedFont ? sanitizeGoogleFontUrl(sanitizedFont) : null;
+  const googleFontsImport = googleFontUrlPart
+    ? `@import url('https://fonts.googleapis.com/css2?family=${googleFontUrlPart}&amp;display=swap');`
+    : '';
+
+  const width = 280;
+  const height = 100;
+  const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+  const titleText = `${truncateUsername(safeUser)}${
+    params.isOfflineFallback ? ' [STALE CACHE]' : ''
+  }`;
+
+  return `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+  <title id="cp-title-${safeId}">CommitPulse Compact Streak for ${safeUser}</title>
+  <desc id="cp-desc-${safeId}">${safeUser} has a current streak of ${stats.currentStreak} days.</desc>
+  <style>
+  @import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600&amp;display=swap');
+  ${googleFontsImport}
+  .cp-compact-title { font-family: ${selectedFont || '"Syncopate", sans-serif'}; fill: ${text}; font-size: 15px; font-weight: 700; letter-spacing: 1px; opacity: 0.9; }
+  .cp-compact-streak { font-family: ${statsFont}; fill: ${accent}; font-size: 20px; font-weight: 600; }
+  </style>
+  <rect width="${width}" height="${height}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bg}" ${borderAttr} />
+  <text x="20" y="42" class="cp-compact-title">${titleText}</text>
+  <text x="20" y="70" class="cp-compact-streak">${'\u{1F525}'} ${stats.currentStreak}d streak</text>
 </svg>`;
 }
 
@@ -883,10 +1033,29 @@ function generateAutoThemeSVG(
 
   const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
 
+  const displayTitle = params.custom_title
+    ? sanitizeCustomText(params.custom_title)
+    : truncateUsername(safeUser).toUpperCase();
+
+  const titleText = `${displayTitle}${
+    params.isOfflineFallback
+      ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>'
+      : ''
+  }`;
+
+  const titleFontSize = getUsernameFontSize(params.custom_title || truncateUsername(safeUser));
+
+  let subtitleElement = '';
+  if (params.custom_subtitle && !params.hide_title && params.label !== false) {
+    const safeSubtitle = sanitizeCustomText(params.custom_subtitle);
+    subtitleElement = `\n  <text x="${s(300)}" y="${s(68)}" text-anchor="middle" class="subtitle">${safeSubtitle}</text>`;
+  }
+
   return `
 <svg
   xmlns="http://www.w3.org/2000/svg"
-  width="100%"
+  width="${W}"
+  height="${H}"
   viewBox="0 0 ${W} ${H}"
   fill="none"
   role="img"
@@ -912,6 +1081,7 @@ function generateAutoThemeSVG(
     to { transform: translateY(var(--scan-end, ${s(240)}px)); }
   }
   .title { font-family: ${selectedFont || '"Syncopate", sans-serif'}; fill: var(--cp-text); font-size: ${fs(18)}px; letter-spacing: ${fs(6)}px; font-weight: 400; opacity: 0.8; }
+  .subtitle { font-family: "Roboto", sans-serif; fill: var(--cp-label-fill); font-size: ${fs(10)}px; font-weight: 400; letter-spacing: ${fs(2)}px; opacity: calc(var(--cp-label-opacity) - 0.1); }
   .stats { font-family: ${statsFont}; fill: var(--cp-text); font-size: ${fs(42)}px; font-weight: 500; letter-spacing: 0; }
   .total-val { font-family: ${statsFont}; fill: var(--cp-accent); font-size: ${fs(24)}px; font-weight: 500; }
   .label { font-family: "Roboto", sans-serif; fill: var(--cp-label-fill); font-size: ${fs(11)}px; font-weight: 400; letter-spacing: ${fs(2)}px; opacity: var(--cp-label-opacity); }
@@ -926,6 +1096,8 @@ function generateAutoThemeSVG(
       transition: none !important;
       transform: translateY(var(--scan-start, ${s(0)}px)) !important;
     }
+    .cp-tower animate { display: none; }
+    .interactive-tower { transition: none !important; }
   }
   </style>
 
@@ -937,24 +1109,16 @@ function generateAutoThemeSVG(
   ${!params.hide_stats ? renderStatsSection(stats, labels, s, params) : ''}
 ${
   !params.hide_title && params.label !== false
-    ? `<text x="${s(300)}" y="${s(50)}" text-anchor="middle" class="title">${truncateUsername(safeUser).toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>`
+    ? `<text x="${s(300)}" y="${s(50)}" text-anchor="middle" class="title" font-size="${fs(titleFontSize)}" style="font-size: ${fs(titleFontSize)}px;">${titleText}</text>`
     : ''
 }
-${renderRadarScan(params.speed || '8s', sf, '', true)}
+${subtitleElement}
+${renderRadarScan(params.speed, sf, '', true)}
 ${renderMilestoneBadges(stats, params, sf)}
 </svg>
 `;
 }
 
-/**
- * Computes the formatted delta text string for the monthly stats badge.
- * Shared between generateMonthlySVG (static theme) and
- * generateAutoThemeMonthlySVG (auto theme) to prevent divergence.
- *
- * @param stats - Monthly contribution statistics
- * @param deltaUnit - 'commits' or 'lines' depending on mode
- * @param deltaFormat - 'percent' | 'absolute' | 'both' from URL params
- */
 function computeDeltaText(
   stats: MonthlyStats,
   deltaUnit: string,
@@ -978,7 +1142,6 @@ function computeDeltaText(
           : `0% (${stats.deltaAbsolute > 0 ? '+' : ''}${stats.deltaAbsolute})`;
   }
 
-  // percent (default)
   return stats.deltaPercentage === null
     ? 'N/A'
     : stats.deltaPercentage > 0
@@ -1026,7 +1189,6 @@ export function generateMonthlySVG(stats: MonthlyStats, params: BadgeParams): st
   const deltaUnit = params.mode === 'loc' ? 'LINES (EST.)' : 'commits';
 
   const deltaText = computeDeltaText(stats, deltaUnit, params.delta_format);
-  // Resolve negative color
   let negativeColor = '#ff4444';
   const cleanBg = sanitizeHexColor(params.bg, '0d1117');
   const matchedTheme = Object.values(themes).find(
@@ -1036,7 +1198,6 @@ export function generateMonthlySVG(stats: MonthlyStats, params: BadgeParams): st
   if (matchedTheme && matchedTheme.negative) {
     negativeColor = `#${matchedTheme.negative}`;
   } else {
-    // Dynamic fallback based on background luminance
     const luminance = getLuminance(cleanBg);
     negativeColor = luminance > 0.5 ? '#cf222e' : '#f85149';
   }
@@ -1073,7 +1234,7 @@ export function generateMonthlySVG(stats: MonthlyStats, params: BadgeParams): st
 
   <rect width="${width}" height="${height}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bgFill}" />
 
-  <text x="20" y="40" class="title">${stats.currentMonthName.toUpperCase()}</text>
+  <text x="20" y="40" class="title">${escapeXML(stats.currentMonthName.toUpperCase())}</text>
   <text x="20" y="85" class="stats">${stats.currentMonthTotal}</text>
   <text x="20" y="105" class="label">${commitsLabel}</text>
 
@@ -1085,10 +1246,6 @@ export function generateMonthlySVG(stats: MonthlyStats, params: BadgeParams): st
 `;
 }
 
-/**
- * Backwards-compatible alias used by some integrations/tests.
- * Keeps the public API explicit: `generateMonthlyBadge` -> `generateMonthlySVG`.
- */
 export function generateMonthlyBadge(stats: MonthlyStats, params: BadgeParams): string {
   return generateMonthlySVG(stats, params);
 }
@@ -1126,7 +1283,6 @@ export function generateWrappedSVG(
     ? `@import url('https://fonts.googleapis.com/css2?family=${googleFontUrlPart}&amp;display=swap');`
     : '';
 
-  // Format month name (e.g. "2025-11" -> "NOVEMBER")
   const MONTH_NAMES: Record<string, string> = {
     '01': 'JANUARY',
     '02': 'FEBRUARY',
@@ -1146,7 +1302,6 @@ export function generateWrappedSVG(
     ? MONTH_NAMES[monthPart] || stats.busiestMonth
     : stats.busiestMonth || 'N/A';
 
-  // Format peak day (e.g. "2025-11-20" -> "Nov 20")
   function formatActiveDate(dateStr: string): string {
     if (!dateStr) return 'N/A';
     const parts = dateStr.split('-');
@@ -1172,29 +1327,20 @@ export function generateWrappedSVG(
   }
   const formattedPeakDate = formatActiveDate(stats.mostActiveDate);
 
-  // Circular progress calculations for weekend grind
-  // Radius = 14, circumference = 2 * PI * 14 = 87.96
   const radiusCircle = 14;
-  const circ = 2 * Math.PI * radiusCircle; // ~87.96
+  const circ = 2 * Math.PI * radiusCircle;
   const clampedRatio = Math.max(0, Math.min(stats.weekendRatio || 0, 100));
   const strokeDashoffset = circ - (clampedRatio / 100) * circ;
 
-  // Background Mini-Monolith calculations
-  // Get 14 weeks of towers and scale them down
-  const sf = 0.45; // scale down
+  const sf = 0.45;
   const rawTowers = computeTowers(calendar, params.scale, '', 'commits');
-  // We want to translate them to align beautifully behind the total contributions count
-  // Scale raw coordinates: tx * sf, ty * sf
   let bgTowersMarkup = '';
   const resolvedSolidColor = accent;
   for (const t of rawTowers) {
-    // Only draw towers that have contributions or represent ghost city landscape
-    // We scale down the height and coordinates
     const scaleHeight = t.h * sf;
-    const scaleX = Math.round(t.x * sf) - 50; // offset left to shift it to the background
-    const scaleY = Math.round(t.y * sf) + 80; // shift down slightly
+    const scaleX = Math.round(t.x * sf) - 50;
+    const scaleY = Math.round(t.y * sf) + 80;
 
-    // Extreme low opacity for elegant backdrop watermark
     const leftFaceOpacity = t.isGhost ? 0.01 : 0.015;
     const rightFaceOpacity = t.isGhost ? 0.005 : 0.01;
     const topFaceOpacity = t.isGhost ? 0.02 : 0.035;
@@ -1210,7 +1356,6 @@ export function generateWrappedSVG(
         </g>`;
   }
 
-  // Border override or default glow
   const borderAttr = params.border
     ? `stroke="#${sanitizeHexColor(params.border, '58a6ff')}" stroke-width="1.5"`
     : `stroke="${accent}" stroke-opacity="0.15" stroke-width="1.5"`;
@@ -1305,7 +1450,7 @@ export function generateWrappedSVG(
     ${accentClass}
     class="scan-line"
     fill-opacity="0.18"
-    style="--scan-speed: ${params.speed || '8s'};"
+    style="--scan-speed: ${sanitizeSpeed(params.speed)};"
   />
 
   <g transform="translate(25, 45)">
@@ -1418,7 +1563,7 @@ function generateAutoThemeMonthlySVG(stats: MonthlyStats, params: BadgeParams): 
 
   <rect width="${width}" height="${height}" rx="${radius}" ${params.hideBackground ? 'fill="transparent"' : 'class="cp-bg-fill"'} />
 
-  <text x="20" y="40" class="title">${stats.currentMonthName.toUpperCase()}</text>
+  <text x="20" y="40" class="title">${escapeXML(stats.currentMonthName.toUpperCase())}</text>
   <text x="20" y="85" class="stats">${stats.currentMonthTotal}</text>
   <text x="20" y="105" class="label">${commitsLabel}</text>
 
@@ -1429,8 +1574,6 @@ function generateAutoThemeMonthlySVG(stats: MonthlyStats, params: BadgeParams): 
 </svg>
 `;
 }
-
-// ── Heatmap View ──────────────────────────────────────────────────────────
 
 const HEATMAP_CELL_SIZE = 16;
 const HEATMAP_CELL_GAP = 3;
@@ -1482,7 +1625,6 @@ function renderHeatmapGrid(
   const originY = Math.round(HEATMAP_GRID_ORIGIN_Y * sf);
   const step = cellSize + cellGap;
 
-  // Find max contribution count for intensity calculation
   let maxCount = 0;
   weeks.forEach((week) => {
     week.contributionDays.forEach((day) => {
@@ -1492,14 +1634,12 @@ function renderHeatmapGrid(
     });
   });
 
-  // Check if todayDate is in visible window
   const todayInWindow = weeks.some((w) => w.contributionDays.some((d) => d.date === todayDate));
 
   let cells = '';
   let monthHeaders = '';
   let prevMonth = '';
 
-  // Render grid cells
   weeks.forEach((week, col) => {
     week.contributionDays.forEach((day, row) => {
       const count =
@@ -1513,13 +1653,13 @@ function renderHeatmapGrid(
         day.date === todayDate ||
         (!todayInWindow && col === weeks.length - 1 && row === week.contributionDays.length - 1);
 
-      const unit = mode === 'loc' ? 'est. lines of code' : 'contributions';
+      const [yr, m, d] = day.date.split('-');
+      const formattedDate = `${MONTH_NAMES[parseInt(m, 10) - 1]} ${parseInt(d, 10)}`;
+      const unit = mode === 'loc' ? 'est. lines of code' : 'commits';
       const tooltipPrefix = isToday ? 'TODAY: ' : '';
-      const tooltip = `${tooltipPrefix}${day.date}: ${count} ${unit}`;
+      const tooltip = `${tooltipPrefix}${formattedDate}: ${count} ${unit}`;
 
       const fillAttr = isAutoTheme ? 'fill="var(--cp-accent)"' : `fill="${accent}"`;
-
-      // Glow on high-intensity cells
       const filterAttr = intensity === 4 && glow !== false ? ' filter="url(#hm-glow)"' : '';
 
       cells += `
@@ -1533,7 +1673,6 @@ function renderHeatmapGrid(
       </rect>`;
     });
 
-    // Month header: detect month change from first day of each week
     if (week.contributionDays.length > 0) {
       const firstDay = week.contributionDays[0];
       const monthNum = parseInt(firstDay.date.substring(5, 7), 10);
@@ -1549,7 +1688,6 @@ function renderHeatmapGrid(
     }
   });
 
-  // Weekday labels
   let weekdayLabels = '';
   HEATMAP_WEEKDAY_LABELS.forEach((label, row) => {
     if (!label) return;
@@ -1608,6 +1746,7 @@ export function generateHeatmapSVG(
   if (params.autoTheme) return generateAutoThemeHeatmapSVG(stats, params, calendar);
 
   const safeUser = escapeXML(params.user || 'GitHub User');
+  const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
   const bg = `#${sanitizeHexColor(params.bg, '0d1117')}`;
   const bgFill =
     params.bgType === 'linear' || params.bgType === 'radial' ? 'url(#canvas-gradient)' : bg;
@@ -1618,7 +1757,9 @@ export function generateHeatmapSVG(
   const accent = `#${sanitizeHexColor(rawAccent, '00ffaa')}`;
   const text = `#${sanitizeHexColor(params.text, 'ffffff')}`;
 
-  const borderAttr = params.border ? `stroke="#${params.border}" stroke-width="2"` : '';
+  const borderAttr = params.border
+    ? `stroke="#${sanitizeHexColor(params.border, '000000')}" stroke-width="2"`
+    : '';
 
   const sanitizedFont = sanitizeFont(params.font);
   const selectedFont = resolveFont(sanitizedFont);
@@ -1664,9 +1805,9 @@ export function generateHeatmapSVG(
       : '';
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img">
-  <title>CommitPulse Heatmap for ${safeUser}</title>
-  <desc>${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+  <title id="cp-title-${safeId}">CommitPulse Heatmap for ${safeUser}</title>
+  <desc id="cp-desc-${safeId}">${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
 
   <defs>
     ${filterGlow}
@@ -1717,7 +1858,7 @@ export function generateHeatmapSVG(
     x="${s(60)}" y="${s(55)}" width="${s(2)}" height="${s(133)}"
     fill="${accent}" fill-opacity="0.2"
     class="hm-scan"
-    style="--scan-speed: ${params.speed || '8s'};"
+    style="--scan-speed: ${sanitizeSpeed(params.speed)};"
   />
 
   ${
@@ -1734,7 +1875,10 @@ export function generateHeatmapSVG(
     </g>
     <g transform="translate(${s(360)}, 0)">
       <text class="hm-label">${labels.PEAK_STREAK}</text>
-      <text y="${s(22)}" class="hm-stats-val">${stats.longestStreak}</text>
+      <g>
+        <text y="${s(22)}" class="hm-stats-val">${stats.longestStreak}</text>
+        ${getInlineMilestoneBadge(stats.longestStreak, s, Math.max(22, stats.longestStreak.toString().length * 9 + 5), 10)}
+      </g>
     </g>
   </g>`
       : ''
@@ -1752,6 +1896,7 @@ function generateAutoThemeHeatmapSVG(
   const light = AUTO_THEME_LIGHT;
   const dark = AUTO_THEME_DARK;
   const safeUser = escapeXML(params.user || 'GitHub User');
+  const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
 
   const sanitizedFont = sanitizeFont(params.font);
   const selectedFont = resolveFont(sanitizedFont);
@@ -1791,9 +1936,9 @@ function generateAutoThemeHeatmapSVG(
       : '';
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img">
-  <title>CommitPulse Heatmap for ${safeUser}</title>
-  <desc>${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+  <title id="cp-title-${safeId}">CommitPulse Heatmap for ${safeUser}</title>
+  <desc id="cp-desc-${safeId}">${safeUser} has ${stats.totalContributions} ${unit} and a longest streak of ${stats.longestStreak} days.</desc>
 
   <defs>
     ${filterGlow}
@@ -1850,7 +1995,7 @@ function generateAutoThemeHeatmapSVG(
     x="${s(60)}" y="${s(55)}" width="${s(2)}" height="${s(133)}"
     class="cp-accent-fill hm-scan"
     fill-opacity="0.2"
-    style="--scan-speed: ${params.speed || '8s'};"
+    style="--scan-speed: ${sanitizeSpeed(params.speed)};"
   />
 
   ${
@@ -1867,7 +2012,10 @@ function generateAutoThemeHeatmapSVG(
     </g>
     <g transform="translate(${s(360)}, 0)">
       <text class="hm-label">${labels.PEAK_STREAK}</text>
-      <text y="${s(22)}" class="hm-stats-val">${stats.longestStreak}</text>
+      <g>
+        <text y="${s(22)}" class="hm-stats-val">${stats.longestStreak}</text>
+        ${getInlineMilestoneBadge(stats.longestStreak, s, Math.max(22, stats.longestStreak.toString().length * 9 + 5), 10)}
+      </g>
     </g>
   </g>`
       : ''
@@ -1877,7 +2025,6 @@ function generateAutoThemeHeatmapSVG(
 </svg>`;
 }
 
-// Fixed isometric tower layout for the not-found ghost city.
 const GHOST_LAYOUT: { col: number; row: number; h: number }[] = [
   { col: 0, row: 0, h: 8 },
   { col: 1, row: 0, h: 20 },
@@ -1929,16 +2076,6 @@ const GHOST_LAYOUT: { col: number; row: number; h: number }[] = [
   { col: 7, row: 5, h: 6 },
 ];
 
-/**
- * Renders a list of ghost tower entries as isometric wireframe SVG paths.
- * Shared by generateNotFoundSVG and generateRateLimitSVG to avoid duplicated
- * ghost-city rendering logic. Any visual change to ghost tower geometry
- * (stroke widths, fill-opacity, coordinate math) only needs to happen here.
- *
- * @param layout - Array of {col, row, h} tower descriptors
- * @param accent - Hex color string (with #) for tower stroke and fill tint
- * @returns SVG string: a <g class="ghost-towers"> wrapping all tower groups
- */
 function renderGhostTowers(
   layout: { col: number; row: number; h: number }[],
   accent: string
@@ -1963,6 +2100,28 @@ function renderGhostTowers(
   return `<g class="ghost-towers">${ghostTowers}</g>`;
 }
 
+/**
+ * Renders the shared SVG definitions (filters and gradients)
+ * used by both NotFound and RateLimit ghost SVGs.
+ * * @param bg - The background color string to match the ghost fade gradient.
+ */
+export function renderGhostDefs(bg: string): string {
+  return `
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="softglow" x="-80%" y="-80%" width="360%" height="360%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <linearGradient id="ghostFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="30%" stop-color="${bg}" stop-opacity="0"/>
+      <stop offset="100%" stop-color="${bg}" stop-opacity="1"/>
+    </linearGradient>
+  `;
+}
+
 export function generateNotFoundSVG(
   username: string,
   bg: string,
@@ -1971,6 +2130,7 @@ export function generateNotFoundSVG(
   radius: number,
   speed: string = '8s'
 ): string {
+  const safeSpeed = sanitizeSpeed(speed);
   const sanitizedUsername = username.replace(/[^a-zA-Z0-9\-]/g, '').slice(0, 39) || 'unknown';
   const safeName = escapeXML(sanitizedUsername.toUpperCase());
   const ghostTowersHtml = renderGhostTowers(GHOST_LAYOUT, accent);
@@ -1989,22 +2149,11 @@ export function generateNotFoundSVG(
   <title id="cp-title-${safeId}">User not found — ${safeName}</title>
   <desc id="cp-desc-${safeId}">The GitHub user ${safeName} was not found or has no contribution data.</desc>
   <defs>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="5" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-    <filter id="softglow" x="-80%" y="-80%" width="360%" height="360%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-    <linearGradient id="ghostFade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="30%" stop-color="${bg}" stop-opacity="0"/>
-      <stop offset="100%" stop-color="${bg}" stop-opacity="1"/>
-    </linearGradient>
+    ${renderGhostDefs(bg)}
   </defs>
 
   <style>
-@import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap');    .title  { font-family: "Syncopate", sans-serif; fill: ${text}; font-size: 18px; letter-spacing: 6px; font-weight: 400; opacity: 0.5; }
+@import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600&amp;display=swap');    .title  { font-family: "Syncopate", sans-serif; fill: ${text}; font-size: 18px; letter-spacing: 6px; font-weight: 400; opacity: 0.5; }
     .label  { font-family: "Roboto", sans-serif; fill: ${accent}; font-size: 11px; letter-spacing: 2px; opacity: 0.4; }
     .stats  { font-family: "Space Grotesk", sans-serif; fill: ${text}; font-size: 42px; font-weight: 500; opacity: 0.2; }
     .ghost-pulse { animation: gp 2.6s ease-in-out infinite; }
@@ -2029,9 +2178,9 @@ export function generateNotFoundSVG(
 
   <rect width="${SVG_WIDTH}" height="${SVG_HEIGHT}" rx="${radius}" fill="url(#ghostFade)"/>
 
-  <rect x="100" y="80" width="400" height="1" class="scan-line" fill="${accent}" fill-opacity="0.12" style="--scan-speed: ${speed};"/>
+  <rect x="100" y="80" width="400" height="1" class="scan-line" fill="${accent}" fill-opacity="0.12" style="--scan-speed: ${safeSpeed};"/>
 
-  <text x="300" y="50" text-anchor="middle" class="title">${safeName}</text>
+  <text x="300" y="50" text-anchor="middle" class="title" font-size="${getUsernameFontSize(truncateUsername(sanitizedUsername))}" style="font-size: ${getUsernameFontSize(truncateUsername(sanitizedUsername))}px;">${escapeXML(truncateUsername(sanitizedUsername).toUpperCase())}</text>
 
   <rect x="180" y="62" width="240" height="1" fill="${accent}" fill-opacity="0.15"/>
 
@@ -2129,7 +2278,7 @@ export function generateVersusSVG(
   const isWinner2 = stats2.totalContributions > stats1.totalContributions;
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
   <title id="cp-title-${safeId}">CommitPulse Versus Stats: ${safeUser1} vs ${safeUser2}</title>
   <desc id="cp-desc-${safeId}">${safeUser1} has ${stats1.totalContributions} ${unit}. ${safeUser2} has ${stats2.totalContributions} ${unit}.</desc>
   ${renderDefs(sf, params)}
@@ -2192,26 +2341,8 @@ function generateAutoThemeVersusSVG(
     sf
   );
 
-  const towers1 = renderTowers(
-    towerData1,
-    params,
-    '',
-    '',
-    sf,
-    true,
-    params.opacity ?? 1.0,
-    params.animate ?? true
-  );
-  const towers2 = renderTowers(
-    towerData2,
-    params,
-    '',
-    '',
-    sf,
-    true,
-    params.opacity ?? 1.0,
-    params.animate ?? true
-  );
+  const towers1 = renderTowers(towerData1, params, '', '', sf, true, params.opacity ?? 1.0);
+  const towers2 = renderTowers(towerData2, params, '', '', sf, true, params.opacity ?? 1.0);
 
   const s = createScaler(sf);
   const fs = (n: number): number => Math.round(n * sf * 10) / 10;
@@ -2223,7 +2354,7 @@ function generateAutoThemeVersusSVG(
   const isWinner2 = stats2.totalContributions > stats1.totalContributions;
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
   <title id="cp-title-${safeId}">CommitPulse Versus Stats: ${safeUser1} vs ${safeUser2}</title>
   <desc id="cp-desc-${safeId}">${safeUser1} has ${stats1.totalContributions} ${unit}. ${safeUser2} has ${stats2.totalContributions} ${unit}.</desc>
   ${renderDefs(sf, params)}
@@ -2317,7 +2448,6 @@ export function generatePulseSVG(
   const width = params.width || 800;
   const height = params.height || 170;
 
-  // Extract the last 30 days of contributions
   const days: number[] = [];
   calendar.weeks.forEach((week) => {
     week.contributionDays.forEach((day) => {
@@ -2426,6 +2556,7 @@ export function generatePulseSVG(
   @media (prefers-reduced-motion: reduce) {
     .pulse-line { animation: none !important; stroke-dashoffset: 0; }
     .pulse-area { animation: none !important; opacity: 1; }
+    .pulse-dot animate { display: none; }
   }
   </style>
 
@@ -2453,7 +2584,7 @@ export function generatePulseSVG(
   <line x1="${paddingX}" y1="${paddingYTop}" x2="${width - paddingX}" y2="${paddingYTop}" stroke="${text}" stroke-width="0.75" stroke-opacity="0.05" />
   <line x1="${paddingX}" y1="${paddingYTop + graphHeight}" x2="${width - paddingX}" y2="${paddingYTop + graphHeight}" stroke="${text}" stroke-width="0.75" stroke-opacity="0.05" />
 
-  ${!params.hide_title ? `<text x="30" y="38" class="title">${safeUser.toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
+  ${!params.hide_title ? `<text x="30" y="38" class="title" font-size="${getUsernameFontSize(truncateUsername(safeUser))}" style="font-size: ${getUsernameFontSize(truncateUsername(safeUser))}px;">${truncateUsername(safeUser).toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
   ${
     !params.hide_stats
       ? `
@@ -2466,7 +2597,7 @@ export function generatePulseSVG(
   <path class="pulse-area" d="${areaPathD}" />
   <path class="pulse-line" d="${pathD}" pathLength="1" />
 
-  <g>
+  <g class="pulse-dot">
     <circle cx="${lastX}" cy="${lastY}" r="7" fill="${accent}" opacity="0.4">
       <animate attributeName="r" values="5;10;5" dur="2s" repeatCount="indefinite" />
       <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite" />
@@ -2614,6 +2745,7 @@ function generateAutoThemePulseSVG(
   @media (prefers-reduced-motion: reduce) {
     .pulse-line { animation: none !important; stroke-dashoffset: 0; }
     .pulse-area { animation: none !important; opacity: 1; }
+    .pulse-dot animate { display: none; }
   }
   </style>
 
@@ -2641,7 +2773,7 @@ function generateAutoThemePulseSVG(
   <line x1="${paddingX}" y1="${paddingYTop}" x2="${width - paddingX}" y2="${paddingYTop}" stroke="var(--cp-text)" stroke-width="0.75" stroke-opacity="0.05" />
   <line x1="${paddingX}" y1="${paddingYTop + graphHeight}" x2="${width - paddingX}" y2="${paddingYTop + graphHeight}" stroke="var(--cp-text)" stroke-width="0.75" stroke-opacity="0.05" />
 
-  ${!params.hide_title ? `<text x="30" y="38" class="title">${safeUser.toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
+  ${!params.hide_title ? `<text x="30" y="38" class="title" font-size="${getUsernameFontSize(truncateUsername(safeUser))}" style="font-size: ${getUsernameFontSize(truncateUsername(safeUser))}px;">${truncateUsername(safeUser).toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
   ${
     !params.hide_stats
       ? `
@@ -2654,7 +2786,7 @@ function generateAutoThemePulseSVG(
   <path class="pulse-area" d="${areaPathD}" />
   <path class="pulse-line" d="${pathD}" pathLength="1" />
 
-  <g>
+  <g class="pulse-dot">
     <circle cx="${lastX}" cy="${lastY}" r="7" fill="var(--cp-accent)" opacity="0.4">
       <animate attributeName="r" values="5;10;5" dur="2s" repeatCount="indefinite" />
       <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite" />
@@ -2759,17 +2891,24 @@ function renderSkylineSVG(
     ? params.accent.map((c) => `#${sanitizeHexColor(c, '00ffaa')}`)
     : [accent];
 
+  const scaleParam: 'linear' | 'log' | 'sqrt' =
+    params.scale === 'log' || params.scale === 'sqrt' ? params.scale : 'linear';
+
+  const maxPossibleHeight =
+    scaleParam === 'log'
+      ? MAX_LOG_HEIGHT
+      : scaleParam === 'sqrt'
+        ? MAX_SQRT_HEIGHT
+        : MAX_LINEAR_HEIGHT;
+
   weeklyContributions.forEach((count, i) => {
     const x = paddingX + i * stepX;
 
     let normalized = 0;
     if (count > 0) {
-      if (params.scale === 'log') {
-        const logMax = Math.log2(maxWeeklyCount + 1) || 1;
-        normalized = Math.log2(count + 1) / logMax;
-      } else {
-        normalized = count / maxWeeklyCount;
-      }
+      const divisor = maxWeeklyCount || 1;
+      const towerHeight = computeTowerHeight(count, scaleParam, false, divisor);
+      normalized = towerHeight / maxPossibleHeight;
     }
 
     let h = normalized * graphHeight;
@@ -2935,9 +3074,9 @@ function renderSkylineSVG(
     `;
   }
 
-  const groundStroke = isAutoTheme ? 'var(--cp-accent)' : accent;
+  const strokeStroke = isAutoTheme ? 'var(--cp-accent)' : accent;
   const groundLine = `
-    <line x1="${paddingX}" y1="${bottomY}" x2="${width - paddingX}" y2="${bottomY}" stroke="${groundStroke}" stroke-width="1.5" stroke-opacity="0.6" filter="url(#horizonGlow)" />
+    <line x1="${paddingX}" y1="${bottomY}" x2="${width - paddingX}" y2="${bottomY}" stroke="${strokeStroke}" stroke-width="1.5" stroke-opacity="0.6" filter="url(#horizonGlow)" />
   `;
 
   const upperUser = escapeXML((params.user || 'GitHub User').toUpperCase());
@@ -3017,20 +3156,15 @@ function renderSkylineSVG(
 
   <rect width="${width}" height="${height}" rx="${radius}" class="${isAutoTheme && !params.hideBackground ? 'cp-bg-fill' : ''}" fill="${params.hideBackground ? 'transparent' : styleBg}" />
 
-  <!-- Sky glow gradient -->
   <rect x="${paddingX}" y="${paddingYTop - 20}" width="${graphWidth}" height="${graphHeight + 20}" fill="url(#skyGradient)" />
 
-  <!-- Stars Background -->
   <g class="cp-stars">${starsSVG}</g>
 
-  <!-- Skyline Buildings -->
   <g class="cp-skyline">${buildingsSVG}</g>
 
-  <!-- Horizon Ground Line -->
   ${groundLine}
 
-  <!-- Header Info -->
-  ${!params.hide_title ? `<text x="30" y="38" class="title">${safeUser}</text>` : ''}
+  ${!params.hide_title ? `<text x="30" y="38" class="title" font-size="${getUsernameFontSize(truncateUsername(safeUser))}" style="font-size: ${getUsernameFontSize(truncateUsername(safeUser))}px;">${truncateUsername(safeUser)}</text>` : ''}
   ${
     !params.hide_stats
       ? `
@@ -3056,11 +3190,19 @@ export function generateRateLimitSVG(
   accent: string,
   text: string,
   radius: number,
-  speed: string = '8s'
+  speed: string = '8s',
+  isCircuitOpen = false
 ): string {
+  const safeSpeed = sanitizeSpeed(speed);
   const ghostTowersHtml = renderGhostTowers(GHOST_LAYOUT, accent);
 
   const safeId = 'rate_limit';
+  const subtitle = isCircuitOpen ? 'CIRCUIT BREAKER' : 'RATE LIMITED';
+  const subtitleWidth = isCircuitOpen ? 220 : 180;
+  const subtitleRectX = 300 - subtitleWidth / 2;
+  const note = isCircuitOpen
+    ? 'Circuit breaker active. System is temporarily offline.'
+    : 'Please wait a moment before trying again';
 
   return `<svg
   xmlns="http://www.w3.org/2000/svg"
@@ -3074,28 +3216,20 @@ export function generateRateLimitSVG(
   <title id="cp-title-${safeId}">Rate Limit Exceeded</title>
   <desc id="cp-desc-${safeId}">GitHub API rate limit exceeded. Please try again later.</desc>
   <defs>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="5" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-    <filter id="softglow" x="-80%" y="-80%" width="360%" height="360%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-    </filter>
-    <linearGradient id="ghostFade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="30%" stop-color="${bg}" stop-opacity="0"/>
-      <stop offset="100%" stop-color="${bg}" stop-opacity="1"/>
-    </linearGradient>
+    ${renderGhostDefs(bg)}
   </defs>
 
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600&amp;display=swap');
-    .title  { font-family: "Syncopate", sans-serif; fill: ${text}; font-size: 18px; letter-spacing: 6px; font-weight: 400; opacity: 0.5; }
-    .label  { font-family: "Roboto", sans-serif; fill: ${accent}; font-size: 11px; letter-spacing: 2px; opacity: 0.4; }
-    .stats  { font-family: "Space Grotesk", sans-serif; fill: ${text}; font-size: 42px; font-weight: 500; opacity: 0.2; }
-    .ghost-pulse { animation: gp 2.6s ease-in-out infinite; }
-    @keyframes gp { 0%,100%{opacity:.55} 50%{opacity:1} }
-    @media (prefers-reduced-motion: reduce) { .ghost-pulse { animation: none; } }
+     @import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600&amp;display=swap');
+     .title  { font-family: "Syncopate", sans-serif; fill: ${text}; font-size: 18px; letter-spacing: 6px; font-weight: 400; opacity: 0.5; }
+     .label  { font-family: "Roboto", sans-serif; fill: ${accent}; font-size: 11px; letter-spacing: 2px; opacity: 0.4; }
+     .stats  { font-family: "Space Grotesk", sans-serif; fill: ${text}; font-size: 42px; font-weight: 500; opacity: 0.2; }
+     .ghost-pulse { animation: gp 2.6s ease-in-out infinite; }
+     @keyframes gp { 0%,100%{opacity:.55} 50%{opacity:1} }
+     @media (prefers-reduced-motion: reduce) {
+       .ghost-pulse { animation: none; }
+       .rate-limit-scan animate { display: none; }
+     }
   </style>
 
   <rect width="${SVG_WIDTH}" height="${SVG_HEIGHT}" rx="${radius}" fill="${bg}"/>
@@ -3106,8 +3240,8 @@ export function generateRateLimitSVG(
 
   <rect width="${SVG_WIDTH}" height="${SVG_HEIGHT}" rx="${radius}" fill="url(#ghostFade)"/>
 
-  <rect x="100" y="80" width="400" height="1" fill="${accent}" fill-opacity="0.12">
-    <animate attributeName="y" values="80;320;80" dur="${speed}" repeatCount="indefinite"/>
+  <rect x="100" y="80" width="400" height="1" fill="${accent}" fill-opacity="0.12" class="rate-limit-scan">
+    <animate attributeName="y" values="80;320;80" dur="${safeSpeed}" repeatCount="indefinite"/>
   </rect>
 
   <text x="300" y="50" text-anchor="middle" class="title">API RATE LIMIT</text>
@@ -3119,17 +3253,17 @@ export function generateRateLimitSVG(
   <path d="M300 172 V200 M300 210 V210.1"
     stroke="${accent}" stroke-width="2.5" stroke-linecap="round" stroke-opacity="0.6"/>
 
-  <rect x="210" y="235" width="180" height="22" rx="4"
+  <rect x="${subtitleRectX}" y="235" width="${subtitleWidth}" height="22" rx="4"
     fill="${accent}" fill-opacity="0.08"
     stroke="${accent}" stroke-width="0.8" stroke-opacity="0.25"/>
   <text x="300" y="250" text-anchor="middle"
     font-family="Syncopate, sans-serif" font-size="9" font-weight="700"
-    fill="${accent}" opacity="0.7" letter-spacing="4">RATE LIMITED</text>
+    fill="${accent}" opacity="0.7" letter-spacing="4">${subtitle}</text>
 
   <text x="300" y="278" text-anchor="middle"
     font-family="Space Grotesk, sans-serif" font-size="11"
     fill="${text}" opacity="0.3">
-    Please wait a moment before trying again
+    ${note}
   </text>
 
   <g transform="translate(40, 340)">
@@ -3163,7 +3297,9 @@ export function generateLanguagesSVG(
   const accent = `#${sanitizeHexColor(accentStr, '00ffaa')}`;
 
   const text = `#${sanitizeHexColor(params.text, 'ffffff')}`;
-  const borderAttr = params.border ? `stroke="#${params.border}" stroke-width="2"` : '';
+  const borderAttr = params.border
+    ? `stroke="#${sanitizeHexColor(params.border, '000000')}" stroke-width="2"`
+    : '';
 
   const sanitizedFont = sanitizeFont(params.font);
   const selectedFont = resolveFont(sanitizedFont);
@@ -3192,7 +3328,7 @@ export function generateLanguagesSVG(
 
   if (total === 0) {
     return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
   ${renderHeader(safeUser, stats, sf, params, safeId)}
   ${renderStyle(selectedFont, statsFont, googleFontsImport, text, accent, sf, bg, params.entrance || 'rise')}
   <rect width="${W}" height="${H}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bg}" ${borderAttr} />
@@ -3210,21 +3346,18 @@ export function generateLanguagesSVG(
     .sort((a, b) => b.percentage - a.percentage)
     .slice(0, 5);
 
-  // We use custom isometric pixel coordinates from a center origin
-  // to spread the 5 towers across the canvas.
-  const TOWER_SCALE = 2.5; // Make the 5 language towers much larger than daily contribution tiles
+  const TOWER_SCALE = 2.5;
   const V_SHAPE_COORDS = [
-    { x: 0, y: 0, zIndex: 3 }, // 1st (Center, Front)
-    { x: -80, y: -45, zIndex: 2 }, // 2nd (Left, Mid)
-    { x: 80, y: -45, zIndex: 2 }, // 3rd (Right, Mid)
-    { x: -160, y: -90, zIndex: 1 }, // 4th (Far Left, Back)
-    { x: 160, y: -90, zIndex: 1 }, // 5th (Far Right, Back)
+    { x: 0, y: 0, zIndex: 3 },
+    { x: -80, y: -45, zIndex: 2 },
+    { x: 80, y: -45, zIndex: 2 },
+    { x: -160, y: -90, zIndex: 1 },
+    { x: 160, y: -90, zIndex: 1 },
   ];
 
   let towersHtml = '';
   const maxPercent = languages[0]?.percentage || 100;
 
-  // Sort languages by zIndex so we render back-to-front (painter's algorithm)
   const sortedLanguages = languages
     .map((lang, idx) => ({
       ...lang,
@@ -3233,7 +3366,6 @@ export function generateLanguagesSVG(
     .sort((a, b) => a.coord.zIndex - b.coord.zIndex);
 
   sortedLanguages.forEach((lang, idx) => {
-    // W and H are already scaled by sf, so we only scale the coordinate offsets
     const scaledX = W / 2 + lang.coord.x * sf;
     const scaledY = H / 2 + (50 + lang.coord.y) * sf;
     const h = Math.max(30, (lang.percentage / maxPercent) * 140) * sf;
@@ -3243,24 +3375,24 @@ export function generateLanguagesSVG(
 
     const hexColor = lang.color.startsWith('#') ? lang.color : `#${lang.color}`;
     const delay = (idx * 0.15).toFixed(3);
-    const tooltip = `${lang.name}: ${lang.percentage}%`;
+    const tooltip = `${escapeXML(lang.name)}: ${lang.percentage}%`;
 
     towersHtml += `
         <g transform="translate(${scaledX}, ${scaledY})">
           <g class="cp-tower interactive-tower" style="animation-delay: ${delay}s;">
-            <title>${escapeXML(tooltip)}</title>
+            <title>${tooltip}</title>
             <path d="${paths.left}" fill="${hexColor}" fill-opacity="0.85" />
             <path d="${paths.right}" fill="${hexColor}" fill-opacity="0.65" />
             <path d="${paths.top}" fill="${hexColor}" fill-opacity="1.0" />
             
-            <text x="0" y="${-h - 18 * sf}" text-anchor="middle" font-family='${statsFont}' font-size="${14 * sf}px" fill="${text}" font-weight="bold">${lang.name}</text>
+            <text x="0" y="${-h - 18 * sf}" text-anchor="middle" font-family='${statsFont}' font-size="${14 * sf}px" fill="${text}" font-weight="bold">${escapeXML(lang.name)}</text>
             <text x="0" y="${-h - 4 * sf}" text-anchor="middle" font-family='${statsFont}' font-size="${12 * sf}px" fill="${text}" opacity="0.6">${lang.percentage}%</text>
           </g>
         </g>`;
   });
 
   return `
-<svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" role="img" aria-labelledby="cp-title-${safeId}" aria-describedby="cp-desc-${safeId}">
   ${renderHeader(safeUser, stats, sf, params, safeId)}
   ${renderStyle(selectedFont, statsFont, googleFontsImport, text, accent, sf, bg, params.entrance || 'rise')}
   <rect width="${W}" height="${H}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bg}" ${borderAttr} />
@@ -3271,4 +3403,405 @@ export function generateLanguagesSVG(
   
   ${renderFooter(stats, params, labels, safeUser, accent, sf)}
 </svg>`;
+}
+
+// ─── Activity Graph View ───────────────────────────────────────────────────
+
+export function generateActivityGraphSVG(
+  stats: StreakStats,
+  params: BadgeParams,
+  calendar: ContributionCalendar
+): string {
+  if (params.autoTheme) return generateAutoThemeActivityGraphSVG(stats, params, calendar);
+
+  const safeUser = escapeXML(params.user || 'GitHub User');
+  const bg = `#${sanitizeHexColor(params.bg, '0d1117')}`;
+  const bgFill =
+    params.bgType === 'linear' || params.bgType === 'radial' ? 'url(#canvas-gradient)' : bg;
+
+  const rawAccent = Array.isArray(params.accent)
+    ? params.accent[params.accent.length - 1]
+    : params.accent;
+  const accent = `#${sanitizeHexColor(rawAccent, '00ffaa')}`;
+  const text = `#${sanitizeHexColor(params.text, 'ffffff')}`;
+
+  const sanitizedFont = sanitizeFont(params.font);
+  const selectedFont = resolveFont(sanitizedFont);
+  const isPredefinedFont = isBundledFont(sanitizedFont);
+  const statsFont = selectedFont || '"Space Grotesk", sans-serif';
+  const googleFontUrlPart =
+    sanitizedFont && !isPredefinedFont ? sanitizeGoogleFontUrl(sanitizedFont) : null;
+  const googleFontsImport = googleFontUrlPart
+    ? `@import url('https://fonts.googleapis.com/css2?family=${googleFontUrlPart}&amp;display=swap');`
+    : '';
+
+  const parsedRadius = Number(params.radius);
+  const radius = Math.max(0, Math.min(Number.isNaN(parsedRadius) ? 8 : parsedRadius, 50));
+
+  const width = params.width || 800;
+  const height = params.height || 220;
+
+  const { pathD, areaPathD, trendPathD, peakX, peakY, peakCount, peakDate, days, totalCount } =
+    _buildActivityGraphData(calendar, params, width, height);
+
+  const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+  const unit = params.mode === 'loc' ? 'LINES (EST.)' : 'COMMITS';
+
+  return `
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="${width}"
+  height="${height}"
+  viewBox="0 0 ${width} ${height}"
+  fill="none"
+  role="img"
+  aria-labelledby="cp-title-${safeId}"
+  aria-describedby="cp-desc-${safeId}"
+>
+  <title id="cp-title-${safeId}">Activity Graph for ${safeUser}</title>
+  <desc id="cp-desc-${safeId}">Contribution activity graph for ${safeUser} over ${days} days, totalling ${totalCount} ${unit.toLowerCase()}.</desc>
+  ${_renderActivityGraphDefs(accent, bg, params)}
+  <style>
+  @import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap');
+  ${googleFontsImport}
+  ${_activityGraphCSS(selectedFont, statsFont, text, accent, false)}
+  </style>
+  <rect width="${width}" height="${height}" rx="${radius}" fill="${params.hideBackground ? 'transparent' : bgFill}" />
+  <path class="ag-area" d="${areaPathD}" />
+  <path class="ag-trend" d="${trendPathD}" stroke="${accent}" />
+  <path class="ag-line" d="${pathD}" stroke="${accent}" />
+  ${_renderPeakAnnotation(peakX, peakY, peakCount, peakDate, accent, text, statsFont, false)}
+  ${!params.hide_title ? `<text x="24" y="28" class="ag-title">${safeUser.toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
+  ${!params.hide_stats ? `<text x="${width - 24}" y="28" text-anchor="end" class="ag-total">${totalCount} ${unit}</text>` : ''}
+</svg>
+`;
+}
+
+function generateAutoThemeActivityGraphSVG(
+  stats: StreakStats,
+  params: BadgeParams,
+  calendar: ContributionCalendar
+): string {
+  const light = AUTO_THEME_LIGHT;
+  const dark = AUTO_THEME_DARK;
+  const safeUser = escapeXML(params.user || 'GitHub User');
+
+  const sanitizedFont = sanitizeFont(params.font);
+  const selectedFont = resolveFont(sanitizedFont);
+  const isPredefinedFont = isBundledFont(sanitizedFont);
+  const statsFont = selectedFont || '"Space Grotesk", sans-serif';
+  const googleFontUrlPart =
+    sanitizedFont && !isPredefinedFont ? sanitizeGoogleFontUrl(sanitizedFont) : null;
+  const googleFontsImport = googleFontUrlPart
+    ? `@import url('https://fonts.googleapis.com/css2?family=${googleFontUrlPart}&amp;display=swap');`
+    : '';
+
+  const parsedRadius = Number(params.radius);
+  const radius = Math.max(0, Math.min(Number.isNaN(parsedRadius) ? 8 : parsedRadius, 50));
+
+  const width = params.width || 800;
+  const height = params.height || 220;
+
+  const { pathD, areaPathD, trendPathD, peakX, peakY, peakCount, peakDate, days, totalCount } =
+    _buildActivityGraphData(calendar, params, width, height);
+
+  const safeId = safeUser.replace(/[^a-zA-Z0-9-]/g, '_').toLowerCase();
+  const unit = params.mode === 'loc' ? 'LINES (EST.)' : 'COMMITS';
+
+  return `
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="${width}"
+  height="${height}"
+  viewBox="0 0 ${width} ${height}"
+  fill="none"
+  role="img"
+  aria-labelledby="cp-title-${safeId}"
+  aria-describedby="cp-desc-${safeId}"
+>
+  <title id="cp-title-${safeId}">Activity Graph for ${safeUser}</title>
+  <desc id="cp-desc-${safeId}">Contribution activity graph for ${safeUser} over ${days} days, totalling ${totalCount} ${unit.toLowerCase()}.</desc>
+  <defs>
+    <linearGradient id="ag-area-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--cp-accent)" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="var(--cp-accent)" stop-opacity="0.0" />
+    </linearGradient>
+    <filter id="ag-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+  </defs>
+  <style>
+  @import url('https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&amp;family=Space+Grotesk:wght@400;500;600;700&amp;display=swap');
+  ${googleFontsImport}
+  :root { --cp-bg: #${light.bg}; --cp-text: #${light.text}; --cp-accent: #${light.accent}; }
+  @media (prefers-color-scheme: dark) { :root { --cp-bg: #${dark.bg}; --cp-text: #${dark.text}; --cp-accent: #${dark.accent}; } }
+  .cp-bg-fill { fill: var(--cp-bg); }
+  ${_activityGraphCSS(selectedFont, statsFont, 'var(--cp-text)', 'var(--cp-accent)', true)}
+  </style>
+  <rect width="${width}" height="${height}" rx="${radius}" ${params.hideBackground ? 'fill="transparent"' : 'class="cp-bg-fill"'} />
+  <path class="ag-area" d="${areaPathD}" />
+  <path class="ag-trend" d="${trendPathD}" stroke="var(--cp-accent)" />
+  <path class="ag-line" d="${pathD}" stroke="var(--cp-accent)" />
+  ${_renderPeakAnnotation(peakX, peakY, peakCount, peakDate, 'var(--cp-accent)', 'var(--cp-text)', statsFont, true)}
+  ${!params.hide_title ? `<text x="24" y="28" class="ag-title">${safeUser.toUpperCase()}${params.isOfflineFallback ? '<tspan fill="#ff9f43" font-size="10px" font-weight="bold"> [STALE CACHE]</tspan>' : ''}</text>` : ''}
+  ${!params.hide_stats ? `<text x="${width - 24}" y="28" text-anchor="end" class="ag-total">${totalCount} ${unit}</text>` : ''}
+</svg>
+`;
+}
+
+interface ActivityGraphData {
+  pathD: string;
+  areaPathD: string;
+  trendPathD: string;
+  peakX: number;
+  peakY: number;
+  peakCount: number;
+  peakDate: string;
+  days: number;
+  totalCount: number;
+}
+
+function _buildActivityGraphData(
+  calendar: ContributionCalendar,
+  params: BadgeParams,
+  width: number,
+  height: number
+): ActivityGraphData {
+  // Flatten all days from the calendar (already filtered to from/to by API)
+  const allDays = calendar.weeks.flatMap((w) => w.contributionDays);
+
+  // Deduplicate by date, preserving order
+  const seen = new Set<string>();
+  const uniqueDays = allDays.filter((d) => {
+    if (!d || seen.has(d.date)) return false;
+    seen.add(d.date);
+    return true;
+  });
+
+  const counts = uniqueDays.map((d) =>
+    params.mode === 'loc' ? (d.locAdditions || 0) + (d.locDeletions || 0) : d.contributionCount
+  );
+
+  const totalCount = counts.reduce((s, c) => s + c, 0);
+  const n = counts.length;
+
+  const paddingX = 40;
+  const paddingYTop = 46;
+  const paddingYBottom = 24;
+  const graphWidth = width - paddingX * 2;
+  const graphHeight = height - paddingYTop - paddingYBottom;
+  const bottomY = paddingYTop + graphHeight;
+
+  const maxCount = Math.max(...counts, 1);
+  const minCount = Math.min(...counts);
+  const range = maxCount - minCount || 1;
+
+  const stepX = n > 1 ? graphWidth / (n - 1) : graphWidth;
+
+  // Point coordinates
+  const pts = counts.map((c, i) => {
+    const x = paddingX + i * stepX;
+    const normalized = (c - minCount) / range;
+    const y = paddingYTop + graphHeight - normalized * graphHeight;
+    return { x, y, c, date: uniqueDays[i]?.date ?? '' };
+  });
+
+  // Smooth cubic bezier area chart path
+  let pathD = '';
+  pts.forEach((pt, i) => {
+    if (i === 0) {
+      pathD += `M ${pt.x} ${pt.y}`;
+    } else {
+      const prev = pts[i - 1];
+      const cp1x = prev.x + stepX / 2;
+      const cp2x = pt.x - stepX / 2;
+      pathD += ` C ${cp1x} ${prev.y}, ${cp2x} ${pt.y}, ${pt.x} ${pt.y}`;
+    }
+  });
+
+  const lastPt = pts[pts.length - 1] ?? { x: paddingX, y: bottomY };
+  const firstPt = pts[0] ?? { x: paddingX, y: bottomY };
+  const areaPathD = n > 0 ? `${pathD} L ${lastPt.x} ${bottomY} L ${firstPt.x} ${bottomY} Z` : '';
+
+  // Linear trend line (least-squares regression)
+  let sumX = 0,
+    sumY = 0,
+    sumXY = 0,
+    sumXX = 0;
+  pts.forEach(({ x, y }) => {
+    sumX += x;
+    sumY += y;
+    sumXY += x * y;
+    sumXX += x * x;
+  });
+  const slope = n > 1 ? (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX) : 0;
+  const intercept = n > 0 ? (sumY - slope * sumX) / n : paddingYTop + graphHeight / 2;
+  const trendY1 = slope * firstPt.x + intercept;
+  const trendY2 = slope * lastPt.x + intercept;
+  const trendPathD = n > 1 ? `M ${firstPt.x} ${trendY1} L ${lastPt.x} ${trendY2}` : '';
+
+  // Peak point
+  let peakIdx = 0;
+  counts.forEach((c, i) => {
+    if (c > counts[peakIdx]) peakIdx = i;
+  });
+  const peakPt = pts[peakIdx] ?? { x: paddingX, y: paddingYTop, date: '' };
+
+  return {
+    pathD,
+    areaPathD,
+    trendPathD,
+    peakX: peakPt.x,
+    peakY: peakPt.y,
+    peakCount: counts[peakIdx] ?? 0,
+    peakDate: peakPt.date,
+    days: n,
+    totalCount,
+  };
+}
+
+function _renderActivityGraphDefs(accent: string, bg: string, params: BadgeParams): string {
+  const bgFill =
+    params.bgType === 'linear' || params.bgType === 'radial' ? 'url(#canvas-gradient)' : bg;
+
+  let canvasGradient = '';
+  if (params.bgType === 'linear' || params.bgType === 'radial') {
+    const bgStart = params.bgStart
+      ? params.bgStart.startsWith('#')
+        ? params.bgStart
+        : `#${params.bgStart}`
+      : '#0d1117';
+    const bgEnd = params.bgEnd
+      ? params.bgEnd.startsWith('#')
+        ? params.bgEnd
+        : `#${params.bgEnd}`
+      : '#000000';
+    if (params.bgType === 'linear') {
+      const angle = params.bgAngle ?? 90;
+      const angleRad = (angle - 90) * (Math.PI / 180);
+      const x1 = Math.round(50 + Math.cos(angleRad + Math.PI) * 50) + '%';
+      const y1 = Math.round(50 + Math.sin(angleRad + Math.PI) * 50) + '%';
+      const x2 = Math.round(50 + Math.cos(angleRad) * 50) + '%';
+      const y2 = Math.round(50 + Math.sin(angleRad) * 50) + '%';
+      canvasGradient = `<linearGradient id="canvas-gradient" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">
+        <stop offset="0%" stop-color="${bgStart}" />
+        <stop offset="100%" stop-color="${bgEnd}" />
+      </linearGradient>`;
+    } else {
+      canvasGradient = `<radialGradient id="canvas-gradient" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+        <stop offset="0%" stop-color="${bgStart}" />
+        <stop offset="100%" stop-color="${bgEnd}" />
+      </radialGradient>`;
+    }
+  }
+
+  return `<defs>
+    <linearGradient id="ag-area-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0.0" />
+    </linearGradient>
+    <filter id="ag-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+    ${canvasGradient}
+  </defs>`;
+}
+
+function _activityGraphCSS(
+  selectedFont: string | null,
+  statsFont: string,
+  text: string,
+  accent: string,
+  isAutoTheme: boolean
+): string {
+  const areaFill = isAutoTheme ? 'url(#ag-area-grad)' : 'url(#ag-area-grad)';
+  return `
+  .ag-title { font-family: ${selectedFont || '"Syncopate", sans-serif'}; fill: ${text}; font-size: 13px; letter-spacing: 3px; font-weight: 700; opacity: 0.85; }
+  .ag-total { font-family: ${statsFont}; fill: ${accent}; font-size: 15px; font-weight: 600; }
+  .ag-area {
+    fill: ${areaFill};
+    opacity: 0;
+    animation: ag-fade-in 1.2s ease-out 0.4s forwards;
+  }
+  .ag-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    filter: url(#ag-glow);
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: ag-draw 2.2s ease-out forwards;
+  }
+  .ag-trend {
+    fill: none;
+    stroke-width: 1.2;
+    stroke-dasharray: 5 4;
+    opacity: 0.45;
+    stroke-linecap: round;
+  }
+  .ag-peak-dot {
+    animation: ag-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes ag-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes ag-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ag-pulse { 0%,100% { r: 4; opacity: 0.9; } 50% { r: 6; opacity: 0.4; } }
+  @media (prefers-reduced-motion: reduce) {
+    .ag-line { animation: none !important; stroke-dashoffset: 0; }
+    .ag-area { animation: none !important; opacity: 1; }
+    .ag-peak-dot { animation: none !important; }
+  }`;
+}
+
+function _renderPeakAnnotation(
+  peakX: number,
+  peakY: number,
+  peakCount: number,
+  peakDate: string,
+  accent: string,
+  text: string,
+  statsFont: string,
+  isAutoTheme: boolean
+): string {
+  if (peakCount === 0) return '';
+
+  // Format date label: "MMM D"
+  let dateLabel = '';
+  if (peakDate) {
+    const parts = peakDate.split('-');
+    const monthAbbrs = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const m = parts[1] ? monthAbbrs[parseInt(parts[1], 10) - 1] : '';
+    const d = parts[2] ? parseInt(parts[2], 10) : '';
+    dateLabel = m && d ? ` ${m} ${d}` : '';
+  }
+
+  // Flip label above or below to avoid clipping at top
+  const labelY = peakY < 50 ? peakY + 22 : peakY - 14;
+  const textAnchor = peakX > 600 ? 'end' : peakX < 200 ? 'start' : 'middle';
+  const dotFill = isAutoTheme ? 'var(--cp-accent)' : accent;
+  const labelFill = isAutoTheme ? 'var(--cp-accent)' : accent;
+  const dateFill = isAutoTheme ? 'var(--cp-text)' : text;
+
+  return `
+  <g class="ag-peak">
+    <circle cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="5" fill="${dotFill}" opacity="0.25" />
+    <circle class="ag-peak-dot" cx="${peakX.toFixed(1)}" cy="${peakY.toFixed(1)}" r="4" fill="${dotFill}" />
+    <text x="${peakX.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="${textAnchor}"
+      font-family="${statsFont.replace(/"/g, "'")}" font-size="11" font-weight="700" fill="${labelFill}">${peakCount}${dateLabel ? `<tspan font-size="9.5" font-weight="400" fill="${dateFill}" opacity="0.7">${escapeXML(dateLabel)}</tspan>` : ''}</text>
+  </g>`;
 }

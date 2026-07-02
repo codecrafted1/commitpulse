@@ -1,20 +1,25 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import { StudentProfile } from '@/models/StudentProfile';
-import { RateLimiter } from '@/lib/rate-limit';
+import { getRateLimitHeaders, RateLimiter } from '@/lib/rate-limit';
 import { getClientIp } from '@/utils/getClientIp';
 import { resumeConfirmDataSchema, GITHUB_USERNAME_REGEX } from '@/lib/validations';
 import { verifyGitHubOwner } from '@/lib/github-owner-verification';
+import { logger } from '@/lib/logger';
+import { validateCSRF } from '@/lib/security/csrf';
 
 const confirmLimiter = new RateLimiter(10, 60000);
 
 export async function POST(req: Request) {
+  const csrfError = validateCSRF(req);
+  if (csrfError) return csrfError;
   const ip = getClientIp(req);
 
-  if (!(await confirmLimiter.check(ip))) {
+  const rateLimitResult = await confirmLimiter.checkWithResult(ip);
+  if (!rateLimitResult.success) {
     return NextResponse.json(
       { success: false, error: 'Too many requests, please try again later.' },
-      { status: 429 }
+      { status: 429, headers: getRateLimitHeaders(rateLimitResult) }
     );
   }
 
@@ -81,7 +86,21 @@ export async function POST(req: Request) {
 
   try {
     if (!process.env.MONGODB_URI) {
-      console.warn('MONGODB_URI is not set. Bypassing student profile save.');
+      const isProduction =
+        process.env.NODE_ENV === 'production' ||
+        process.env.VERCEL_ENV === 'production' ||
+        process.env.VERCEL_ENV === 'preview';
+      if (isProduction) {
+        return NextResponse.json(
+          { success: false, error: 'Server configuration error: Database not configured' },
+          { status: 500 }
+        );
+      }
+
+      logger.warn('Student profile save bypassed: MONGODB_URI is not set', {
+        environment: process.env.NODE_ENV,
+      });
+
       return NextResponse.json({ success: true, bypassed: true });
     }
 
@@ -105,7 +124,9 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Error saving student profile:', error);
+    logger.error('Failed to save student profile', {
+      error,
+    });
     return NextResponse.json(
       { success: false, error: 'Failed to save profile data' },
       { status: 500 }

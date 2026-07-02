@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { POST } from './route';
 
+vi.mock('@/lib/github-owner-verification', () => ({
+  verifyGitHubOwner: vi.fn().mockResolvedValue({
+    verified: true,
+    status: 200,
+    message: 'OK',
+  }),
+}));
+
 vi.mock('@/lib/mongodb', () => ({
   default: vi.fn(),
 }));
@@ -15,9 +23,15 @@ vi.mock('@/lib/github-owner-verification', () => ({
   verifyGitHubOwner: vi.fn().mockResolvedValue({ verified: true }),
 }));
 
-const { mockRateLimitCheck } = vi.hoisted(() => {
+const { mockRateLimitCheck, mockRateLimitCheckWithResult } = vi.hoisted(() => {
   return {
     mockRateLimitCheck: vi.fn().mockResolvedValue(true),
+    mockRateLimitCheckWithResult: vi.fn().mockResolvedValue({
+      success: true,
+      limit: 5,
+      remaining: 4,
+      reset: Date.now() + 60000,
+    }),
   };
 });
 
@@ -25,12 +39,22 @@ vi.mock('@/lib/rate-limit', () => {
   return {
     RateLimiter: class {
       check = mockRateLimitCheck;
+      checkWithResult = mockRateLimitCheckWithResult;
     },
+    getRateLimitHeaders: vi.fn(() => ({
+      'X-RateLimit-Limit': '5',
+      'X-RateLimit-Remaining': '4',
+      'X-RateLimit-Reset': Date.now().toString(),
+    })),
   };
 });
 
 vi.mock('@/utils/getClientIp', () => ({
   getClientIp: vi.fn().mockReturnValue('127.0.0.1'),
+}));
+
+vi.mock('@/lib/github-owner-verification', () => ({
+  verifyGitHubOwner: vi.fn().mockResolvedValue({ verified: true }),
 }));
 
 // Set up prefers-color-scheme via window.matchMedia mock
@@ -54,6 +78,7 @@ function makeRequest(body: string | Record<string, unknown>): Request {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Authorization: 'Bearer test-owner-token',
     },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
@@ -200,7 +225,12 @@ describe('ApiStudentResumeConfirmRoute - Theme Contrast', () => {
 
   it('rate-limit overlay does not suppress error text in either mode', async () => {
     prefersColorScheme = 'dark';
-    mockRateLimitCheck.mockResolvedValueOnce(false);
+    mockRateLimitCheckWithResult.mockResolvedValueOnce({
+      success: false,
+      limit: 5,
+      remaining: 0,
+      reset: Date.now() + 60000,
+    });
 
     // Verify the simulated client theme context is active
     expect(window.matchMedia('(prefers-color-scheme: dark)').matches).toBe(true);

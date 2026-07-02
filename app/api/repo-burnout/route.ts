@@ -1,8 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { coerceQueryParams } from '@/lib/validations';
 import { fetchBurnoutAnalysis } from '@/services/github/burnout-analyzer';
 import { quotaMonitor } from '@/services/github/quota-monitor';
 import { getClientIp } from '@/utils/getClientIp';
+import { getUserGitHubToken } from '@/lib/githubtoken';
+
+import { refreshPolicy } from '@/services/github/refresh-policy';
+import { getRateLimitHeaders } from '@/lib/rate-limit';
+import { refreshRateLimiter } from '@/services/github/refresh-rate-limiter';
+
+function toRefreshFlag(val?: string): boolean {
+  return val === 'true' || val === '1';
+}
 
 const repoBurnoutParamsSchema = z.object({
   owner: z
@@ -21,17 +31,15 @@ const repoBurnoutParamsSchema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/, {
       message: 'Invalid repo name format',
     }),
-  refresh: z
-    .string()
-    .optional()
-    .transform((val) => val === 'true' || val === '1'),
+  refresh: z.string().optional().transform(toRefreshFlag),
+  bypassCache: z.string().optional().transform(toRefreshFlag),
 });
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const ip = getClientIp(request);
 
-  const parseResult = repoBurnoutParamsSchema.safeParse(Object.fromEntries(searchParams.entries()));
+  const parseResult = repoBurnoutParamsSchema.safeParse(coerceQueryParams(searchParams));
 
   if (!parseResult.success) {
     return NextResponse.json(
@@ -40,21 +48,54 @@ export async function GET(request: Request) {
     );
   }
 
-  const { owner, repo, refresh } = parseResult.data;
+  const { owner, repo, refresh, bypassCache: bypassCacheParam } = parseResult.data;
+
+  // Treat either ?refresh=true or ?bypassCache=true as a cache-bypass request
+  const isRefreshRequested = refresh || bypassCacheParam;
 
   // 1. Quota awareness check - block manual refreshes if GitHub API quota is low
-  if (refresh && quotaMonitor.isQuotaLow()) {
+  if (isRefreshRequested && quotaMonitor.isQuotaLow()) {
     console.warn(`[Quota Low] Blocked manual refresh from IP ${ip} for ${owner}/${repo}`);
     return NextResponse.json(
       { error: 'GitHub API quota is low. Cache refresh temporarily disabled.' },
-      { status: 429 }
+      { status: 429, headers: { 'Retry-After': '60' } }
     );
   }
 
-  try {
-    const data = await fetchBurnoutAnalysis(owner, repo, { bypassCache: refresh });
+  if (isRefreshRequested) {
+    const rateLimitCheck = refreshRateLimiter.checkLimit(ip);
+    if (!rateLimitCheck.success) {
+      console.warn(
+        `[Rate Limit Exceeded] Blocked manual refresh from IP ${ip} for ${owner}/${repo}`
+      );
+      return NextResponse.json(
+        { error: 'Refresh rate limit exceeded. Please try again later.' },
+        {
+          status: 429,
+          headers: getRateLimitHeaders(rateLimitCheck),
+        }
+      );
+    }
+  }
 
-    const cacheControl = refresh
+  let shouldBypassCache = isRefreshRequested;
+  if (isRefreshRequested) {
+    const resourceKey = `${owner}/${repo}`;
+    if (!refreshPolicy.isRefreshAllowed(resourceKey)) {
+      shouldBypassCache = false;
+    } else {
+      refreshPolicy.recordRefresh(resourceKey);
+    }
+  }
+
+  try {
+    const userToken = await getUserGitHubToken();
+    const data = await fetchBurnoutAnalysis(owner, repo, {
+      bypassCache: refresh,
+      token: userToken,
+    });
+
+    const cacheControl = shouldBypassCache
       ? 'no-cache, no-store, must-revalidate'
       : 's-maxage=3600, stale-while-revalidate=86400';
 
@@ -62,7 +103,7 @@ export async function GET(request: Request) {
       status: 200,
       headers: {
         'Cache-Control': cacheControl,
-        'X-Cache-Status': refresh ? 'MISS' : 'HIT',
+        'X-Cache-Status': shouldBypassCache ? 'MISS' : 'HIT',
       },
     });
   } catch (error: unknown) {

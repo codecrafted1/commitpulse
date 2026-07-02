@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
+import { validateGitHubUsername } from '@/lib/validations';
 import { getFullDashboardData } from '@/lib/github';
 import type {
   AchievementDef,
-  AchievementLevelDef,
   AchievementCategory,
-  AchievementRarity,
   AchievementState,
   AchievementData,
   AchievementsResponse,
 } from '@/types/achievements';
+import { getUserGitHubToken } from '@/lib/githubtoken';
+import { getClientIp } from '@/utils/getClientIp';
+import { RateLimiter } from '@/lib/rate-limit';
 
-const GITHUB_USERNAME_REGEX = /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/;
+const achievementsLimiter = new RateLimiter(10, 60_000, 1);
 
 const ACHIEVEMENT_DEFS: AchievementDef[] = [
   // 🔥 Contribution
@@ -548,15 +550,27 @@ function computeDeveloperLevel(totalXp: number): {
 }
 
 export async function GET(request: Request) {
+  const ip = getClientIp(request);
+  const rateLimitKey =
+    ip && ip !== 'unknown' ? ip : `unknown:${request.headers.get('user-agent') ?? 'no-agent'}`;
+
+  if (!(await achievementsLimiter.check(rateLimitKey))) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please try again later.' },
+      { status: 429 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const username = searchParams.get('username');
 
-  if (!username || !GITHUB_USERNAME_REGEX.test(username)) {
+  if (!username || !validateGitHubUsername(username)) {
     return NextResponse.json({ error: 'Valid username parameter is required' }, { status: 400 });
   }
 
   try {
-    const dashboardData = await getFullDashboardData(username);
+    const userToken = await getUserGitHubToken();
+    const dashboardData = await getFullDashboardData(username, { token: userToken });
 
     const { profile, stats, languages } = dashboardData;
     const totalStars = profile.stats.stars;
@@ -586,21 +600,32 @@ export async function GET(request: Request) {
     const frontendCount = languageNames.filter((l) => FRONTEND_LANGUAGES.has(l)).length;
     const backendCount = languageNames.filter((l) => BACKEND_LANGUAGES.has(l)).length;
 
-    const aiRepoCount = languageNames.filter((l) =>
-      AI_KEYWORDS.some((kw) => l.toLowerCase().includes(kw))
+    const popularRepos = (dashboardData.popularRepos ?? []) as Array<{
+      name: string;
+      description: string | null;
+      stargazerCount: number;
+      createdAt: string;
+    }>;
+    const aiRepoCount = popularRepos.filter((repo) =>
+      AI_KEYWORDS.some(
+        (kw) =>
+          repo.name.toLowerCase().includes(kw) ||
+          (repo.description && repo.description.toLowerCase().includes(kw))
+      )
     ).length;
-
-    const popularRepos = (dashboardData.popularRepos ?? []) as Array<{ stargazerCount: number }>;
     let topStarDensity = 0;
     for (const repo of popularRepos) {
-      const density = repo.stargazerCount / 6;
+      const ageInYears = Math.max(
+        0.1,
+        (Date.now() - new Date(repo.createdAt).getTime()) / (1000 * 60 * 60 * 24 * 365.25)
+      );
+      const density = repo.stargazerCount / ageInYears;
       if (density > topStarDensity) topStarDensity = density;
     }
 
     const totalEngagement = totalStars + totalForks + stats.totalIssues + stats.totalPRs;
 
     const totalContributions = stats.totalContributions;
-    const currentStreak = stats.currentStreak;
     const longestStreak = stats.peakStreak;
 
     const allCategories: AchievementCategory[] = [
@@ -620,7 +645,7 @@ export async function GET(request: Request) {
       'pr-rookie': stats.totalPRs,
       'pr-master': stats.totalPRs,
       'merge-master': stats.totalPRs,
-      'review-expert': Math.min(stats.totalPRs, Math.round(stats.totalPRs * 0.3)),
+      'review-expert': stats.totalReviews,
       'pr-legend': stats.totalPRs,
       'star-collector': totalStars,
       'repository-creator': totalRepos,
@@ -709,7 +734,7 @@ export async function GET(request: Request) {
     if (message.toLowerCase().includes('rate limit') || message.includes('API limit reached')) {
       return NextResponse.json(
         { error: 'GitHub API rate limit reached. Please try again later.' },
-        { status: 429 }
+        { status: 429, headers: { 'Retry-After': '60' } }
       );
     }
 

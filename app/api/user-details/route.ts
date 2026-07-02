@@ -2,8 +2,24 @@ import { NextResponse } from 'next/server';
 import { fetchUserProfile, fetchGitHubContributions } from '@/lib/github';
 import { calculateStreak } from '@/lib/calculate';
 import { validateGitHubUsername } from '@/lib/validations';
+import { getClientIp } from '@/utils/getClientIp';
+import { getRateLimitHeaders, RateLimiter } from '@/lib/rate-limit';
+
+const userDetailsLimiter = new RateLimiter(20, 60_000, 1);
 
 export async function GET(request: Request) {
+  const ip = getClientIp(request);
+  const rateLimitKey =
+    ip && ip !== 'unknown' ? ip : `unknown:${request.headers.get('user-agent') ?? 'no-agent'}`;
+
+  const rateLimitResult = await userDetailsLimiter.checkWithResult(rateLimitKey);
+  if (!rateLimitResult.success) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please try again later.' },
+      { status: 429, headers: getRateLimitHeaders(rateLimitResult) }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const username = searchParams.get('username')?.trim();
 

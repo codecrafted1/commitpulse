@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 import { CommitPulseSection } from './CommitPulseSection';
@@ -16,7 +17,8 @@ vi.mock('@/lib/validations', () => ({
 
 // Mock next/image
 vi.mock('next/image', () => ({
-  default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+  /* eslint-disable @next/next/no-img-element */
+  default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img alt="" {...props} />,
 }));
 
 describe('CommitPulseSection Accessibility Standards & Screen Reader Compliance', () => {
@@ -57,14 +59,22 @@ describe('CommitPulseSection Accessibility Standards & Screen Reader Compliance'
   });
 
   // Case 3
-  it('Case 3: clear username button exposes an accessible name', () => {
+  it('Case 3: clear username button exposes an accessible name', async () => {
+    const user = userEvent.setup();
+
     render(<CommitPulseSection {...defaultProps} githubUsername="octocat" />);
 
-    expect(
-      screen.getByRole('button', {
-        name: /clear username/i,
-      })
-    ).toBeInTheDocument();
+    const clearButton = screen.getByRole('button', {
+      name: /clear username/i,
+    });
+
+    expect(clearButton).toBeInTheDocument();
+
+    await user.click(clearButton);
+
+    await waitFor(() => {
+      expect(defaultProps.onGithubUsernameChange).toHaveBeenCalled();
+    });
   });
 
   // Case 4

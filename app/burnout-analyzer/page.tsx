@@ -9,6 +9,7 @@ import DependencyRiskCard from '@/components/burnout/DependencyRiskCard';
 import BurnoutRiskTable from '@/components/burnout/BurnoutRiskTable';
 import InactivityDetector from '@/components/burnout/InactivityDetector';
 import RecommendationsCard from '@/components/burnout/RecommendationsCard';
+import BurnoutRiskAssessmentSection from '@/components/burnout/BurnoutRiskAssessmentSection';
 import type { ContributorMetric } from '@/services/github/burnout-analyzer';
 
 const BurnoutChart = dynamic(() => import('@/components/burnout/BurnoutChart'), { ssr: false });
@@ -42,20 +43,23 @@ export default function BurnoutAnalyzerPage() {
 
   const handleSearch = async (e?: React.FormEvent, targetRepo?: string) => {
     if (e) e.preventDefault();
-    const repoPath = targetRepo || query;
-    if (!repoPath.trim() || !repoPath.includes('/')) {
+    const repoPath = (targetRepo || query).trim();
+    const segments = repoPath.split('/');
+    if (segments.length !== 2 || !segments[0].trim() || !segments[1].trim()) {
       setError('Please enter a valid repository path in "owner/repo" format.');
       return;
     }
+    const owner = segments[0].trim();
+    const repo = segments[1].trim();
 
     setIsLoading(true);
     setError(null);
     setReport(null);
 
-    const [owner, repo] = repoPath.trim().split('/');
-
     try {
-      const res = await fetch(`/api/repo-burnout?owner=${owner}&repo=${repo}`);
+      const res = await fetch(
+        `/api/repo-burnout?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+      );
       const data = await res.json();
 
       if (!res.ok) {
@@ -79,7 +83,9 @@ export default function BurnoutAnalyzerPage() {
     const [owner, repo] = report.repoName.split('/');
 
     try {
-      const res = await fetch(`/api/repo-burnout?owner=${owner}&repo=${repo}&refresh=true`);
+      const res = await fetch(
+        `/api/repo-burnout?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&refresh=true`
+      );
       const data = await res.json();
 
       if (!res.ok) {
@@ -223,6 +229,7 @@ export default function BurnoutAnalyzerPage() {
               sustainabilityScore={report.sustainabilityScore}
               onRefresh={handleRefresh}
               isRefreshing={isRefreshing}
+              report={report}
             />
 
             {error && (
@@ -255,6 +262,9 @@ export default function BurnoutAnalyzerPage() {
                 </div>
               </div>
             </div>
+
+            {/* Burnout Risk Assessment Section */}
+            <BurnoutRiskAssessmentSection report={report} />
           </motion.div>
         )}
       </AnimatePresence>
