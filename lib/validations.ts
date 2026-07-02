@@ -456,12 +456,12 @@ const baseStreakParamsSchema = z.object({
   hide_title: z.string().optional().transform(toBooleanFlag),
   custom_title: z
     .string()
-    .optional()
-    .max(200, { message: 'Title is too long (max 200 characters)' }),
+    .max(200, { message: 'Title is too long (max 200 characters)' })
+    .optional(),
   custom_subtitle: z
     .string()
-    .optional()
-    .max(200, { message: 'Subtitle is too long (max 200 characters)' }),
+    .max(200, { message: 'Subtitle is too long (max 200 characters)' })
+    .optional(),
   hide_background: z.string().optional().transform(toBooleanFlag),
   hide_stats: z.string().optional().transform(toBooleanFlag),
   lang: z.enum(supportedLanguages).catch('en').default('en'),
