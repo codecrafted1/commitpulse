@@ -10,7 +10,7 @@ vi.mock('framer-motion', () => {
     motion: new Proxy(
       {},
       {
-        get: (_target: any, tag: string) =>
+        get: (_target: Record<string, unknown>, tag: string) =>
           function MotionComponent({ children, ...props }: React.HTMLAttributes<HTMLElement>) {
             return React.createElement(tag, props, children);
           },
