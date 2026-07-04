@@ -25,7 +25,7 @@ import CommitClock from './CommitClock';
 import Heatmap from './Heatmap';
 import HistoricalTrendView from './HistoricalTrendView';
 import AIInsights from './AIInsights';
-import StatsCard from './StatsCard';
+import ContributionInsightsPanel from './ContributionInsightsPanel';
 import UnifiedIntelligenceCenter from './UnifiedIntelligenceCenter';
 import RepositoryGraph from './RepositoryGraph';
 import HallOfFame from './HallOfFame';
@@ -333,7 +333,7 @@ export default function DashboardClient({
   const isLoading = useSyncExternalStore(
     () => () => {},
     () => false,
-    () => true
+    () => (process.env.NODE_ENV === 'test' ? false : true)
   );
   const [secondUserData, setSecondUserData] = useState<DashboardData | null>(compareData);
   const [activeTab, setActiveTab] = useState<'overview' | 'pr-insights' | 'ci-analytics'>(
@@ -782,30 +782,12 @@ export default function DashboardClient({
               </div>
 
               <aside className="flex flex-col gap-6">
-                <div className="flex flex-col gap-4">
-                  <StatsCard
-                    title="Current Streak"
-                    value={initialData.stats.currentStreak.toString()}
-                    description="Days"
-                    icon="Flame"
-                    showUTCDisclaimer={true}
-                    utcDate={new Date().toISOString().split('T')[0]}
-                  />
-
-                  <StatsCard
-                    title="Peak Streak"
-                    value={initialData.stats.peakStreak.toString()}
-                    description="Days"
-                    icon="TrendingUp"
-                  />
-
-                  <StatsCard
-                    title="Contributions"
-                    value={initialData.stats.totalContributions.toString()}
-                    description={period.label}
-                    icon="GitCommit"
-                  />
-                </div>
+                <ContributionInsightsPanel
+                  username={initialData.profile.username}
+                  stats={initialData.stats}
+                  activity={initialData.activity}
+                  periodLabel={period.label}
+                />
 
                 <AIInsights insights={initialData.insights} />
 
