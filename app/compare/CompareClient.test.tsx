@@ -97,8 +97,14 @@ const mockResponse = {
 };
 
 describe('CompareClient', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    localStorage.clear();
+
+    const maybeCaches = (global as unknown as { caches?: CacheStorage }).caches;
+    if (maybeCaches && typeof maybeCaches.delete === 'function') {
+      await maybeCaches.delete('commitpulse-compare');
+    }
 
     global.fetch = vi.fn(
       async () =>
@@ -154,8 +160,8 @@ describe('CompareClient', () => {
       expect(screen.getByText(/stats showdown/i)).toBeInTheDocument();
     });
 
-    expect(screen.getByText('5,000')).toBeInTheDocument();
-    expect(screen.getByText('3,000')).toBeInTheDocument();
+    expect(screen.getByText(/5[,\s ]?000/)).toBeInTheDocument();
+    expect(screen.getByText(/3[,\s ]?000/)).toBeInTheDocument();
   });
 
   it('updates route when compare button is clicked', async () => {
@@ -179,6 +185,13 @@ describe('CompareClient', () => {
   });
 
   it('shows error message when api request fails', async () => {
+    localStorage.clear();
+    // Also clear the Cache API to avoid previously cached successful responses
+    // from other tests bypassing the network error path.
+    const maybeCaches = (global as unknown as { caches?: CacheStorage }).caches;
+    if (maybeCaches && typeof maybeCaches.delete === 'function') {
+      await maybeCaches.delete('commitpulse-compare');
+    }
     global.fetch = vi.fn(
       async () =>
         ({

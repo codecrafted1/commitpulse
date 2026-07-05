@@ -1,57 +1,39 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { rateLimit } from './lib/rate-limit';
+import { rateLimit, getRateLimitHeaders } from './lib/rate-limit';
 import { getClientIp } from './utils/getClientIp';
+
+const securityHeaders = {
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self' https:;",
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+};
 
 /**
  * Middleware to enforce rate limiting on specific API routes.
- *
- * Protected Routes:
- * - /api/streak
- * - /api/github
- * - /api/track-user
- * - /api/stats
- * - /api/og
- * - /api/notify
- * - /api/compare
- * - /api/wrapped
- * - /api/student
- *
- * General limit : 60 requests per minute per IP.
- * Refresh limit : 5 requests per minute per IP (when ?refresh=true).
- *
- * The refresh-specific limit is checked first. If it is exceeded the request
- * is rejected immediately with a 429 and the general counter is NOT consumed,
- * which avoids accidentally burning a user's normal quota on blocked refreshes.
  */
 export async function middleware(request: NextRequest) {
-  // Secure client IP extraction
+  // Extract client IP securely using the getClientIp helper
   const ip = getClientIp(request);
 
-  const isRefresh = request.nextUrl.searchParams.get('refresh') === 'true';
+  // Determine if this is a hard-refresh request (bypasses cache/hits GitHub API)
+  const isRefreshRequest =
+    request.nextUrl.searchParams.get('refresh') === 'true' ||
+    request.nextUrl.searchParams.get('bypassCache') === 'true';
 
-  if (isRefresh) {
-    // Stricter limit: 5 cache-bypass requests per minute per IP.
-    // Uses a separate key prefix so it doesn't share counters with the
-    // general rate limiter.
-    const refreshResult = await rateLimit(`refresh:${ip}`, 5, 60000);
+  let result;
 
-    if (!refreshResult.success) {
-      // Return early — do NOT consume the general-limiter quota for a blocked refresh.
-      const resp = NextResponse.json(
-        { error: 'Too many refresh requests. Please wait before bypassing the cache again.' },
-        { status: 429 }
-      );
-      resp.headers.set('X-RateLimit-Limit', refreshResult.limit.toString());
-      resp.headers.set('X-RateLimit-Remaining', '0');
-      resp.headers.set('X-RateLimit-Reset', refreshResult.reset.toString());
-      resp.headers.set('X-RateLimit-Policy', 'refresh');
-      return resp;
-    }
+  if (isRefreshRequest) {
+    // Strict rate limit for explicit refresh requests: 3 requests per 10 minutes (600,000ms)
+    result = await rateLimit(`refresh_limiter:${ip}`, 3, 600000, 'api');
+  } else {
+    // Standard rate limit: 60 requests per 1 minute (60,000ms)
+    result = await rateLimit(ip, 60, 60000, 'api');
   }
-
-  // General limit: 60 requests per 60,000 ms (1 minute)
-  const result = await rateLimit(ip, 60, 60000);
 
   if (!result.success) {
     return NextResponse.json(
@@ -60,34 +42,30 @@ export async function middleware(request: NextRequest) {
         status: 429,
         headers: {
           'Content-Type': 'application/json',
-          'X-RateLimit-Limit': result.limit.toString(),
-          'X-RateLimit-Remaining': result.remaining.toString(),
-          'X-RateLimit-Reset': result.reset.toString(),
+          ...getRateLimitHeaders(result),
+          ...securityHeaders,
         },
       }
     );
   }
 
-  // Build the headers once.
-  // Some API routes return their own Response/NextResponse objects, so we must ensure
-  // the rate-limit headers survive and are present on the final response.
-  const headers = {
-    'X-RateLimit-Limit': result.limit.toString(),
-    'X-RateLimit-Remaining': result.remaining.toString(),
-    'X-RateLimit-Reset': result.reset.toString(),
-  };
-
-  // `NextResponse.next()` attaches headers to the outgoing response pipeline.
-  // Ensure they are set on the returned response object.
   const response = NextResponse.next();
-  Object.entries(headers).forEach(([k, v]) => response.headers.set(k, v));
+
+  // Apply Rate Limit Headers
+  response.headers.set('X-RateLimit-Limit', result.limit.toString());
+  response.headers.set('X-RateLimit-Remaining', result.remaining.toString());
+  response.headers.set('X-RateLimit-Reset', result.reset.toString());
+
+  // Apply Global Security Headers
+  Object.entries(securityHeaders).forEach(([key, value]) => {
+    response.headers.set(key, value);
+  });
 
   return response;
 }
 
 /**
- * Configure which routes should trigger this middleware.
- * Using a matcher is more efficient than checking pathnames inside the middleware.
+ * Configure which routes should trigger this proxy.
  */
 export const config = {
   matcher: [
@@ -100,5 +78,7 @@ export const config = {
     '/api/compare/:path*',
     '/api/wrapped/:path*',
     '/api/student/:path*',
+    '/api/pr-insights/:path*',
+    '/api/architecture/:path*',
   ],
 };

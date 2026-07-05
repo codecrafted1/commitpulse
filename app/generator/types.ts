@@ -50,4 +50,12 @@ export interface GeneratorState {
   selectedTechs: string[];
   selectedSocials: string[];
   socialLinks: Record<string, string>;
+  githubUsername: string;
+  showCommitPulse: boolean;
+  commitPulseAccent: string;
+  showRepoSpotlight: boolean;
+  spotlightRepo: string;
+  showSnakeGraph: boolean;
+  showPacmanGraph: boolean;
+  graphPlacement: 'top' | 'middle' | 'bottom';
 }

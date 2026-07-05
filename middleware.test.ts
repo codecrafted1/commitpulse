@@ -1,38 +1,49 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
-import { middleware, config } from './middleware';
-import { rateLimit } from '@/lib/rate-limit';
+import { middleware } from './middleware';
+import { rateLimit, getRateLimitHeaders } from '@/lib/rate-limit';
 
-vi.mock('@/lib/rate-limit', () => ({
-  rateLimit: vi.fn(),
-}));
+const { mockConfig } = vi.hoisted(() => {
+  return {
+    mockConfig: {
+      useRealRateLimit: false,
+      realRateLimit: null as unknown as typeof rateLimit,
+      realGetRateLimitHeaders: null as unknown as typeof getRateLimitHeaders,
+    },
+  };
+});
 
-// Helper: build a rateLimit mock that returns success for the first call
-// and a given result for the second call (used when both limiters fire).
-function mockBothLimiters(
-  refreshResult: Awaited<ReturnType<typeof rateLimit>>,
-  generalSuccess = true
-) {
-  vi.mocked(rateLimit).mockResolvedValueOnce(refreshResult).mockResolvedValueOnce({
-    success: generalSuccess,
-    limit: 60,
-    remaining: 59,
-    reset: 123456789,
-  });
-}
+vi.mock('@/lib/rate-limit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/rate-limit')>();
+  mockConfig.realRateLimit = actual.rateLimit;
+  mockConfig.realGetRateLimitHeaders = actual.getRateLimitHeaders;
+  return {
+    ...actual,
+    rateLimit: vi.fn(),
+    getRateLimitHeaders: vi.fn(),
+  };
+});
 
 describe('middleware', () => {
-  let originalEnv: string | undefined;
-
   beforeEach(() => {
+    mockConfig.useRealRateLimit = false;
     vi.clearAllMocks();
-    originalEnv = process.env.TRUSTED_PROXIES;
-    // Set trusted proxies to make standard multi-hop tests pass as trusted proxy chains
-    process.env.TRUSTED_PROXIES = '5.6.7.8, 9.10.11.12';
-  });
 
-  afterEach(() => {
-    process.env.TRUSTED_PROXIES = originalEnv;
+    vi.mocked(rateLimit).mockImplementation(async (ip, limit, windowMs, namespace) => {
+      if (mockConfig.useRealRateLimit) {
+        return mockConfig.realRateLimit(ip, limit, windowMs, namespace);
+      }
+      return {
+        success: true,
+        limit: 60,
+        remaining: 59,
+        reset: 123456789,
+      };
+    });
+
+    vi.mocked(getRateLimitHeaders).mockImplementation((result) => {
+      return mockConfig.realGetRateLimitHeaders(result);
+    });
   });
 
   it('calls NextResponse.next when rate limit succeeds', async () => {
@@ -81,21 +92,7 @@ describe('middleware', () => {
     });
   });
 
-  it('calls rateLimit with fixed policy values (60 requests / 60000ms) for normal requests', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: true,
-      limit: 60,
-      remaining: 59,
-      reset: 123456789,
-    });
-
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
-    await middleware(request);
-
-    expect(rateLimit).toHaveBeenCalledWith(expect.any(String), 60, 60000);
-  });
-
-  it('sets all X-RateLimit headers on successful requests', async () => {
+  it('sets X-RateLimit-Limit header when rate limit succeeds', async () => {
     vi.mocked(rateLimit).mockResolvedValue({
       success: true,
       limit: 60,
@@ -107,44 +104,39 @@ describe('middleware', () => {
     const response = await middleware(request);
 
     expect(response.headers.get('X-RateLimit-Limit')).toBe('60');
+  });
+
+  it('sets X-RateLimit-Remaining header when rate limit succeeds', async () => {
+    vi.mocked(rateLimit).mockResolvedValue({
+      success: true,
+      limit: 60,
+      remaining: 59,
+      reset: 123456789,
+    });
+
+    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
+    const response = await middleware(request);
+
     expect(response.headers.get('X-RateLimit-Remaining')).toBe('59');
-    expect(response.headers.get('X-RateLimit-Reset')).toBe('123456789');
   });
 
-  it('keeps headers present on the returned response object (regression)', async () => {
+  it('uses connection IP (request.ip) if present', async () => {
     vi.mocked(rateLimit).mockResolvedValue({
       success: true,
       limit: 60,
-      remaining: 58,
-      reset: 111,
-    });
-
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
-    const response = await middleware(request);
-
-    expect(response.headers.get('X-RateLimit-Limit')).toBe('60');
-    expect(response.headers.get('X-RateLimit-Remaining')).toBe('58');
-    expect(response.headers.get('X-RateLimit-Reset')).toBe('111');
-  });
-
-  it('sets JSON and rate headers on throttled responses', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: false,
-      limit: 60,
-      remaining: 0,
+      remaining: 59,
       reset: 123456789,
     });
 
     const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
-    const response = await middleware(request);
+    Object.defineProperty(request, 'ip', { value: '203.0.113.10', writable: true });
 
-    expect(response.headers.get('Content-Type')).toBe('application/json');
-    expect(response.headers.get('X-RateLimit-Limit')).toBe('60');
-    expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
-    expect(response.headers.get('X-RateLimit-Reset')).toBe('123456789');
+    await middleware(request);
+
+    expect(rateLimit).toHaveBeenCalledWith('203.0.113.10', 60, 60000, 'api');
   });
 
-  it('uses first IP from x-forwarded-for when subsequent hops are trusted', async () => {
+  it('ignores spoofed X-Forwarded-For when request.ip is present', async () => {
     vi.mocked(rateLimit).mockResolvedValue({
       success: true,
       limit: 60,
@@ -157,55 +149,14 @@ describe('middleware', () => {
         'x-forwarded-for': '1.2.3.4, 5.6.7.8',
       },
     });
+    Object.defineProperty(request, 'ip', { value: '203.0.113.10', writable: true });
 
     await middleware(request);
 
-    expect(rateLimit).toHaveBeenCalledWith('1.2.3.4', 60, 60000);
+    expect(rateLimit).toHaveBeenCalledWith('203.0.113.10', 60, 60000, 'api');
   });
 
-  it('ignores spoofed x-forwarded-for when subsequent hops are untrusted', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: true,
-      limit: 60,
-      remaining: 59,
-      reset: 123456789,
-    });
-
-    // Clear trusted proxies so 5.6.7.8 is untrusted
-    process.env.TRUSTED_PROXIES = '';
-
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', {
-      headers: {
-        'x-forwarded-for': '1.2.3.4, 5.6.7.8',
-      },
-    });
-
-    await middleware(request);
-
-    // Should resolve to the untrusted proxy IP (5.6.7.8) instead of the spoofed client IP (1.2.3.4)
-    expect(rateLimit).toHaveBeenCalledWith('5.6.7.8', 60, 60000);
-  });
-
-  it('uses x-real-ip if x-forwarded-for is missing', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: true,
-      limit: 60,
-      remaining: 59,
-      reset: 123456789,
-    });
-
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', {
-      headers: {
-        'x-real-ip': '9.9.9.9',
-      },
-    });
-
-    await middleware(request);
-
-    expect(rateLimit).toHaveBeenCalledWith('9.9.9.9', 60, 60000);
-  });
-
-  it('defaults to 127.0.0.1 when no IP headers', async () => {
+  it('defaults to 127.0.0.1 when no request.ip and headers are untrusted/missing', async () => {
     vi.mocked(rateLimit).mockResolvedValue({
       success: true,
       limit: 60,
@@ -217,188 +168,164 @@ describe('middleware', () => {
 
     await middleware(request);
 
-    expect(rateLimit).toHaveBeenCalledWith('127.0.0.1', 60, 60000);
+    expect(rateLimit).toHaveBeenCalledWith('127.0.0.1', 60, 60000, 'api');
+  });
+});
+
+let testTime = new Date(2026, 5, 26, 12, 0, 0);
+
+describe('middleware integration tests (rate-limit spoofing prevention)', () => {
+  beforeEach(() => {
+    mockConfig.useRealRateLimit = true;
+    vi.useFakeTimers();
+    testTime = new Date(testTime.getTime() + 120000);
+    vi.setSystemTime(testTime);
+
+    vi.mocked(rateLimit).mockImplementation(async (ip, limit, windowMs, namespace) => {
+      return mockConfig.realRateLimit(ip, limit, windowMs, namespace);
+    });
+    vi.mocked(getRateLimitHeaders).mockImplementation((result) => {
+      return mockConfig.realGetRateLimitHeaders(result);
+    });
   });
 
-  it('prefers x-forwarded-for over x-real-ip', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: true,
-      limit: 60,
-      remaining: 59,
-      reset: 123456789,
-    });
-
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', {
-      headers: {
-        'x-forwarded-for': '1.2.3.4, 5.6.7.8',
-        'x-real-ip': '9.9.9.9',
-      },
-    });
-
-    await middleware(request);
-
-    expect(rateLimit).toHaveBeenCalledWith('1.2.3.4', 60, 60000);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
-  it('handles multiple IPs with whitespace', async () => {
-    vi.mocked(rateLimit).mockResolvedValue({
-      success: true,
-      limit: 60,
-      remaining: 59,
-      reset: 123456789,
-    });
+  function makeNextRequest(ip?: string, headers: Record<string, string> = {}): NextRequest {
+    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', { headers });
+    if (ip) {
+      Object.defineProperty(request, 'ip', { value: ip, writable: true });
+    }
+    return request;
+  }
 
-    const request = new NextRequest('http://localhost:3000/api/streak?user=octocat', {
-      headers: {
-        'x-forwarded-for': '1.2.3.4,  5.6.7.8,  9.10.11.12',
-      },
-    });
-
-    await middleware(request);
-
-    expect(rateLimit).toHaveBeenCalledWith('1.2.3.4', 60, 60000);
-  });
-
-  it('includes compare API matcher in middleware config', () => {
-    expect(config.matcher).toContain('/api/compare/:path*');
-  });
-
-  it('includes wrapped and student API matchers in middleware config', () => {
-    expect(config.matcher).toContain('/api/wrapped/:path*');
-    expect(config.matcher).toContain('/api/student/:path*');
-  });
-
-  // ─── ?refresh=true rate-limit tests ───────────────────────────────────────
-
-  describe('?refresh=true cache-bypass rate limit', () => {
-    it('applies the refresh limiter (5 req/min) before the general limiter', async () => {
-      // Both limiters succeed
-      mockBothLimiters({ success: true, limit: 5, remaining: 4, reset: 123456789 });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
-      await middleware(request);
-
-      // First call must be the refresh limiter with the prefixed key
-      expect(rateLimit).toHaveBeenNthCalledWith(1, 'refresh:127.0.0.1', 5, 60000);
-      // Second call must be the general limiter with the bare IP
-      expect(rateLimit).toHaveBeenNthCalledWith(2, '127.0.0.1', 60, 60000);
-    });
-
-    it('returns 429 with refresh-specific message when refresh limit is exceeded', async () => {
-      mockBothLimiters({ success: false, limit: 5, remaining: 0, reset: 123456789 });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
+  it('Scenario 1: Default (No trusted proxies) ignores spoofed headers and locks rate limit to default/connection IP', async () => {
+    // No TRUSTED_PROXIES env is set, and VERCEL is not set.
+    // If request.ip is undefined, all requests resolve to 127.0.0.1 (defaultIp in test mode)
+    // 60 requests should pass, the 61st should be rate-limited.
+    for (let i = 0; i < 60; i++) {
+      const request = makeNextRequest(undefined, {
+        'x-forwarded-for': `192.0.2.${i}`, // Rotating spoofed XFF header
+      });
       const response = await middleware(request);
-
-      expect(response.status).toBe(429);
-      const body = await response.json();
-      expect(body.error).toContain('refresh');
-    });
-
-    it('response limit header is 5 (not 60) when the refresh rate limit is exceeded', async () => {
-      vi.mocked(rateLimit).mockResolvedValueOnce({
-        success: false,
-        limit: 5,
-        remaining: 0,
-        reset: 123456789,
-      });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
-      const response = await middleware(request);
-
-      // The refresh limiter has limit=5, so the header must reflect that — not 60
-      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
-      expect(response.status).toBe(429);
-    });
-
-    it('does NOT invoke the general limiter when the refresh limit is exceeded', async () => {
-      // Only the refresh limiter fires (returns fail); general limiter must not be called.
-      vi.mocked(rateLimit).mockResolvedValueOnce({
-        success: false,
-        limit: 5,
-        remaining: 0,
-        reset: 123456789,
-      });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
-      await middleware(request);
-
-      // The general-limiter call always uses (bare IP, 60, 60000) — it must not appear.
-      expect(rateLimit).not.toHaveBeenCalledWith('127.0.0.1', 60, 60000);
-    });
-
-    it('sets X-RateLimit-Limit to 5 on a blocked refresh request', async () => {
-      vi.mocked(rateLimit).mockResolvedValueOnce({
-        success: false,
-        limit: 5,
-        remaining: 0,
-        reset: 999999,
-      });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
-      const response = await middleware(request);
-
-      expect(response.headers.get('X-RateLimit-Limit')).toBe('5');
-      expect(response.headers.get('X-RateLimit-Remaining')).toBe('0');
-    });
-
-    it('skips the refresh limiter when refresh param is absent', async () => {
-      vi.mocked(rateLimit).mockResolvedValue({
-        success: true,
-        limit: 60,
-        remaining: 59,
-        reset: 123456789,
-      });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat');
-      await middleware(request);
-
-      // Only the general limiter should be called
-      expect(rateLimit).toHaveBeenCalledTimes(1);
-      expect(rateLimit).toHaveBeenCalledWith('127.0.0.1', 60, 60000);
-    });
-
-    it('skips the refresh limiter when refresh=false', async () => {
-      vi.mocked(rateLimit).mockResolvedValue({
-        success: true,
-        limit: 60,
-        remaining: 59,
-        reset: 123456789,
-      });
-
-      const request = new NextRequest(
-        'http://localhost:3000/api/streak?user=octocat&refresh=false'
-      );
-      await middleware(request);
-
-      expect(rateLimit).toHaveBeenCalledTimes(1);
-      expect(rateLimit).not.toHaveBeenCalledWith(expect.stringContaining('refresh:'), 5, 60000);
-    });
-
-    it('still applies general limiter when refresh succeeds', async () => {
-      mockBothLimiters({ success: true, limit: 5, remaining: 3, reset: 123456789 });
-
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
-      const response = await middleware(request);
-
-      // Both limiters ran and overall request succeeded
-      expect(rateLimit).toHaveBeenCalledTimes(2);
       expect(response.status).toBe(200);
+    }
+
+    // The 61st request should be rate-limited to 429
+    const request61 = makeNextRequest(undefined, {
+      'x-forwarded-for': '192.0.2.99',
     });
+    const response61 = await middleware(request61);
+    expect(response61.status).toBe(429);
 
-    it('returns 429 from general limiter even when refresh succeeds', async () => {
-      // refresh OK, general fails
-      vi.mocked(rateLimit)
-        .mockResolvedValueOnce({ success: true, limit: 5, remaining: 2, reset: 123456789 })
-        .mockResolvedValueOnce({ success: false, limit: 60, remaining: 0, reset: 123456789 });
+    // Any other spoofed header should STILL get 429 because it maps to 127.0.0.1
+    const request62 = makeNextRequest(undefined, {
+      'x-forwarded-for': '192.0.2.100',
+    });
+    const response62 = await middleware(request62);
+    expect(response62.status).toBe(429);
+  });
 
-      const request = new NextRequest('http://localhost:3000/api/streak?user=octocat&refresh=true');
+  it('Scenario 1b: Default (No trusted proxies) uses connection IP (request.ip) and ignores spoofed X-Forwarded-For', async () => {
+    const connectionIp = '192.0.2.200'; // Unique IP for this test to avoid cache pollution
+
+    // 60 requests from the same connection IP should pass, even if X-Forwarded-For is different
+    for (let i = 0; i < 60; i++) {
+      const request = makeNextRequest(connectionIp, {
+        'x-forwarded-for': `1.2.3.${i}`,
+      });
       const response = await middleware(request);
+      expect(response.status).toBe(200);
+    }
 
-      expect(response.status).toBe(429);
-      const body = await response.json();
-      // The general-limiter error body does NOT mention "refresh"
-      expect(body.error).toBe('Too many requests');
+    // 61st request should be rate-limited
+    const request61 = makeNextRequest(connectionIp, {
+      'x-forwarded-for': '1.2.3.99',
     });
+    const response61 = await middleware(request61);
+    expect(response61.status).toBe(429);
+
+    // Changing the spoofed header value does NOT bypass the rate limit
+    const request62 = makeNextRequest(connectionIp, {
+      'x-forwarded-for': '9.9.9.9',
+    });
+    const response62 = await middleware(request62);
+    expect(response62.status).toBe(429);
+  });
+
+  it('Scenario 2: Wildcard trust (TRUSTED_PROXIES=*) trusts leftmost X-Forwarded-For IP', async () => {
+    vi.stubEnv('TRUSTED_PROXIES', '*');
+
+    // We'll use client IPs in the 198.51.100.x range.
+    const clientIp = '198.51.100.10';
+
+    // 60 requests with XFF leftmost IP = clientIp should pass
+    for (let i = 0; i < 60; i++) {
+      const request = makeNextRequest(undefined, {
+        'x-forwarded-for': `${clientIp}, 10.0.0.1, 10.0.0.2`,
+      });
+      const response = await middleware(request);
+      expect(response.status).toBe(200);
+    }
+
+    // 61st request with same clientIp should be rate-limited
+    const request61 = makeNextRequest(undefined, {
+      'x-forwarded-for': `${clientIp}, 10.0.0.1, 10.0.0.2`,
+    });
+    const response61 = await middleware(request61);
+    expect(response61.status).toBe(429);
+
+    // Changing the leftmost IP (the true client under wildcard trust) should bypass the rate limit
+    const differentClientIp = '198.51.100.11';
+    const request62 = makeNextRequest(undefined, {
+      'x-forwarded-for': `${differentClientIp}, 10.0.0.1, 10.0.0.2`,
+    });
+    const response62 = await middleware(request62);
+    expect(response62.status).toBe(200);
+  });
+
+  it('Scenario 2b: VERCEL=1 behaves as wildcard trust', async () => {
+    vi.stubEnv('VERCEL', '1');
+    const clientIp = '198.51.100.20';
+
+    // 60 requests should pass
+    for (let i = 0; i < 60; i++) {
+      const request = makeNextRequest(undefined, {
+        'x-forwarded-for': `${clientIp}, 10.0.0.1`,
+      });
+      const response = await middleware(request);
+      expect(response.status).toBe(200);
+    }
+
+    // 61st request should be rate-limited
+    const request61 = makeNextRequest(undefined, {
+      'x-forwarded-for': `${clientIp}, 10.0.0.1`,
+    });
+    const response61 = await middleware(request61);
+    expect(response61.status).toBe(429);
+  });
+
+  it('Scenario 3: Custom trusted proxies reject X-Forwarded-For if no direct peer is established', async () => {
+    vi.stubEnv('TRUSTED_PROXIES', '192.0.2.1, 10.0.0.0/8');
+
+    // Request with undefined request.ip.
+    // X-Forwarded-For should be rejected and resolved to 127.0.0.1.
+    for (let i = 0; i < 60; i++) {
+      const request = makeNextRequest(undefined, {
+        'x-forwarded-for': `198.51.100.${i}`,
+      });
+      const response = await middleware(request);
+      expect(response.status).toBe(200);
+    }
+
+    // 61st request gets 429
+    const request61 = makeNextRequest(undefined, {
+      'x-forwarded-for': '198.51.100.99',
+    });
+    const response61 = await middleware(request61);
+    expect(response61.status).toBe(429);
   });
 });

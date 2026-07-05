@@ -110,6 +110,16 @@ export default function HistoricalTrendView({
     [streakSeries]
   );
   const currentStreak = streakSeries.at(-1) ?? 0;
+  const today = new Date().toISOString().slice(0, 10);
+  const windowStart = period.from.slice(0, 10);
+  const windowEnd = period.to.slice(0, 10);
+  // A past window shows the streak at its end; a future window has not started; otherwise it is current.
+  const streakLabel =
+    today < windowStart
+      ? 'Upcoming Streak'
+      : today > windowEnd
+        ? 'Ending Streak'
+        : 'Current Streak';
   const maxSeries = Math.max(...streakSeries, 1);
   const sparklinePoints = streakSeries
     .map((value, index) => {
@@ -177,14 +187,14 @@ export default function HistoricalTrendView({
           <button
             type="button"
             onClick={() => handleShift('prev')}
-            className="inline-flex items-center gap-1 rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold text-gray-900 transition hover:bg-gray-50 dark:border-[rgba(255,255,255,0.08)] dark:text-white dark:hover:bg-white/5"
+            className="inline-flex items-center gap-1 rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold text-gray-900 transition hover:bg-gray-50 dark:border-[rgba(255,255,255,0.08)] dark:text-white dark:hover:bg-white/5 cursor-pointer"
           >
             <ChevronLeft size={14} /> Previous
           </button>
           <button
             type="button"
             onClick={() => handleShift('next')}
-            className="inline-flex items-center gap-1 rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold text-gray-900 transition hover:bg-gray-50 dark:border-[rgba(255,255,255,0.08)] dark:text-white dark:hover:bg-white/5"
+            className="inline-flex items-center gap-1 rounded-lg border border-black/10 px-3 py-2 text-xs font-semibold text-gray-900 transition hover:bg-gray-50 dark:border-[rgba(255,255,255,0.08)] dark:text-white dark:hover:bg-white/5 cursor-pointer"
           >
             Next <ChevronRight size={14} />
           </button>
@@ -208,7 +218,7 @@ export default function HistoricalTrendView({
           <p className="mt-1 text-xs text-[#A1A1AA]">Days with at least one contribution</p>
         </div>
         <div className="rounded-xl border border-black/10 bg-gray-50 p-4 dark:border-[rgba(255,255,255,0.06)] dark:bg-[#111]">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-[#A1A1AA]">Current Streak</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-[#A1A1AA]">{streakLabel}</p>
           <p className="mt-2 flex items-center gap-2 text-3xl font-semibold text-gray-900 dark:text-white">
             <Flame size={22} className="text-emerald-500" />
             {currentStreak}
@@ -242,7 +252,7 @@ export default function HistoricalTrendView({
 
           <div className="rounded-xl border border-black/10 bg-gray-50 p-4 dark:border-[rgba(255,255,255,0.06)] dark:bg-[#111]">
             {streakSeries.length > 0 ? (
-              <svg viewBox="0 0 100 100" className="h-40 w-full">
+              <svg data-testid="streak-sparkline" viewBox="0 0 100 100" className="h-40 w-full">
                 <defs>
                   <linearGradient id="streak-gradient" x1="0" y1="0" x2="1" y2="0">
                     <stop offset="0%" stopColor="#10b981" />
@@ -283,7 +293,7 @@ export default function HistoricalTrendView({
               />
               <button
                 type="submit"
-                className="rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100"
+                className="rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100 cursor-pointer"
               >
                 Go
               </button>
@@ -308,7 +318,7 @@ export default function HistoricalTrendView({
               />
               <button
                 type="submit"
-                className="rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100"
+                className="rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100 cursor-pointer"
               >
                 Go
               </button>
@@ -338,7 +348,7 @@ export default function HistoricalTrendView({
             </div>
             <button
               type="submit"
-              className="mt-3 w-full rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100"
+              className="mt-3 w-full rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-gray-100 cursor-pointer"
             >
               Apply Range
             </button>

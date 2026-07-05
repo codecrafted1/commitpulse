@@ -2,12 +2,69 @@ import { getTechById } from '../data/technologies';
 import { getSocialById } from '../data/socials';
 import type { GeneratorState } from '../types';
 
+const BADGE_BASE = 'https://commitpulse.vercel.app/api/streak';
+const DASHBOARD_BASE = 'https://commitpulse.vercel.app/dashboard';
+
 function diImg(iconUrl: string, name: string, size = 40): string {
   return `<img src="${iconUrl}" alt="${name}" width="${size}" height="${size}" title="${name}" />`;
 }
 
+function buildBadgeUrl(username: string, accentHex: string): string {
+  const params = new URLSearchParams({ user: username });
+  const cleaned = accentHex.replace(/^#/, '');
+  if (/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+    params.set('accent', cleaned);
+  }
+  return `${BADGE_BASE}?${params.toString()}`;
+}
+
+function buildGraphsMarkdown(state: GeneratorState): string | null {
+  if (!state.githubUsername || !state.githubUsername.trim()) return null;
+  if (!state.showSnakeGraph && !state.showPacmanGraph) return null;
+
+  const username = state.githubUsername.trim();
+  const graphSections: string[] = [];
+
+  if (state.showSnakeGraph) {
+    graphSections.push(
+      [
+        '## 🐍 Snake Contribution Graph',
+        '',
+        '<div align="center">',
+        '  <picture>',
+        `    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/${username}/${username}/output/github-snake-dark.svg" />`,
+        `    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/${username}/${username}/output/github-snake.svg" />`,
+        `    <img alt="github contribution grid snake svg" src="https://raw.githubusercontent.com/${username}/${username}/output/github-snake.svg" />`,
+        '  </picture>',
+        '</div>',
+      ].join('\n')
+    );
+  }
+
+  if (state.showPacmanGraph) {
+    graphSections.push(
+      [
+        '## 👾 Pacman Contribution Graph',
+        '',
+        '<div align="center">',
+        '  <picture>',
+        `    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/${username}/${username}/output/pacman-contribution-graph-dark.svg" />`,
+        `    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/${username}/${username}/output/pacman-contribution-graph.svg" />`,
+        `    <img alt="pacman contribution graph" src="https://raw.githubusercontent.com/${username}/${username}/output/pacman-contribution-graph.svg" />`,
+        '  </picture>',
+        '</div>',
+      ].join('\n')
+    );
+  }
+
+  return graphSections.join('\n\n');
+}
+
 export function generateReadme(state: GeneratorState): string {
   const sections: string[] = [];
+  const graphsMarkdown = buildGraphsMarkdown(state);
+
+  // 1. Header Section
   if (state.name) {
     const headerLines: string[] = ['<div align="center">', '', `# 👋 Hi, I'm ${state.name}`];
 
@@ -23,6 +80,12 @@ export function generateReadme(state: GeneratorState): string {
     sections.push(`<div align="center">\n\n<p>${state.description}</p>\n\n</div>`);
   }
 
+  // Inject top graphs
+  if (state.graphPlacement === 'top' && graphsMarkdown) {
+    sections.push(graphsMarkdown);
+  }
+
+  // 2. Tech Stack Section
   if (state.selectedTechs.length > 0) {
     const techLines: string[] = ['## 🛠️ Tech Stack', '', '<div align="center">'];
 
@@ -32,8 +95,9 @@ export function generateReadme(state: GeneratorState): string {
         if (!tech) return null;
 
         if (tech.type === 'simpleicon') {
-          const dark = `https://cdn.simpleicons.org/${id}/ffffff`;
-          const light = `https://cdn.simpleicons.org/${id}/000000`;
+          const slug = tech.iconUrl.split('/').pop() || id;
+          const dark = `https://cdn.simpleicons.org/${slug}/ffffff`;
+          const light = `https://cdn.simpleicons.org/${slug}/000000`;
           return [
             '<picture>',
             `  <source media="(prefers-color-scheme: dark)" srcset="${dark}" />`,
@@ -53,6 +117,12 @@ export function generateReadme(state: GeneratorState): string {
     sections.push(techLines.join('\n'));
   }
 
+  // Inject middle graphs
+  if (state.graphPlacement === 'middle' && graphsMarkdown) {
+    sections.push(graphsMarkdown);
+  }
+
+  // 3. Socials Section
   const activeSocials = state.selectedSocials.filter((id) => state.socialLinks[id]?.trim());
 
   if (activeSocials.length > 0) {
@@ -89,6 +159,58 @@ export function generateReadme(state: GeneratorState): string {
     socialLines.push('');
     socialLines.push('</div>');
     sections.push(socialLines.join('\n'));
+  }
+
+  // 4. CommitPulse Badge Section
+  if (state.showCommitPulse && state.githubUsername.trim()) {
+    const username = state.githubUsername.trim();
+    const badgeUrl = buildBadgeUrl(username, state.commitPulseAccent);
+    const dashboardUrl = `${DASHBOARD_BASE}/${username}`;
+    const altText = `CommitPulse Contribution Graph for ${username}`;
+
+    const commitPulseLines = [
+      '## 📊 GitHub Streak',
+      '',
+      '<div align="center">',
+      '',
+      `[![${altText}](${badgeUrl})](${dashboardUrl})`,
+      '',
+      '</div>',
+    ];
+
+    sections.push(commitPulseLines.join('\n'));
+  }
+
+  // 5. Repository Spotlight Section
+  if (state.showRepoSpotlight && state.githubUsername.trim() && state.spotlightRepo) {
+    const username = state.githubUsername.trim();
+    const repo = state.spotlightRepo.trim();
+
+    const params = new URLSearchParams({ user: username, repo });
+    const cleaned = state.commitPulseAccent.replace(/^#/, '');
+    if (/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+      params.set('accent', cleaned);
+    }
+    const spotlightBadgeUrl = `https://commitpulse.vercel.app/api/spotlight?${params.toString()}`;
+    const repoUrl = `https://github.com/${username}/${repo}`;
+    const altText = `Repository Spotlight: ${repo}`;
+
+    const spotlightLines = [
+      '## 🌟 Repository Spotlight',
+      '',
+      '<div align="center">',
+      '',
+      `[![${altText}](${spotlightBadgeUrl})](${repoUrl})`,
+      '',
+      '</div>',
+    ];
+
+    sections.push(spotlightLines.join('\n'));
+  }
+
+  // Inject bottom graphs
+  if (state.graphPlacement === 'bottom' && graphsMarkdown) {
+    sections.push(graphsMarkdown);
   }
 
   return sections.join('\n\n---\n\n');

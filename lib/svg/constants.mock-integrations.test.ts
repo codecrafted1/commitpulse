@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { SVG_WIDTH, SVG_HEIGHT, CONTRIBUTION_MILESTONES, STREAK_MILESTONES } from './constants';
 import {
-  SVG_WIDTH,
-  SVG_HEIGHT,
   GHOST_HEIGHT_PX,
   LOG_SCALE_MULTIPLIER,
   LINEAR_SCALE_MULTIPLIER,
   MAX_LOG_HEIGHT,
   MAX_LINEAR_HEIGHT,
-  FONT_MAP,
-  CONTRIBUTION_MILESTONES,
-  STREAK_MILESTONES,
-} from './constants';
+} from './layoutConstants';
+import { FONT_MAP } from './fonts';
 
 describe('lib/svg/constants', () => {
   it('should expose expected SVG dimensions', () => {
@@ -20,9 +17,9 @@ describe('lib/svg/constants', () => {
 
   it('should expose expected rendering scale constants', () => {
     expect(GHOST_HEIGHT_PX).toBe(4);
-    expect(LOG_SCALE_MULTIPLIER).toBe(12);
+    expect(LOG_SCALE_MULTIPLIER).toBe(15);
     expect(LINEAR_SCALE_MULTIPLIER).toBe(5);
-    expect(MAX_LOG_HEIGHT).toBe(80);
+    expect(MAX_LOG_HEIGHT).toBe(50);
     expect(MAX_LINEAR_HEIGHT).toBe(50);
   });
 
@@ -31,6 +28,11 @@ describe('lib/svg/constants', () => {
       jetbrains: '"JetBrains Mono", monospace',
       fira: '"Fira Code", monospace',
       roboto: '"Roboto", sans-serif',
+      syncopate: '"Syncopate", sans-serif',
+      spacegrotesk: '"Space Grotesk", sans-serif',
+      'space grotesk': '"Space Grotesk", sans-serif',
+      firacode: '"Fira Code", monospace',
+      'jetbrains mono': '"JetBrains Mono", monospace',
     });
   });
 

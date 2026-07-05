@@ -5,7 +5,10 @@ import Leaderboard, { Contributor } from './Leaderboard';
 
 // Mock Next.js Image
 vi.mock('next/image', () => ({
-  default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img alt="mock" {...props} />,
+  default: ({ ...props }: React.ImgHTMLAttributes<HTMLImageElement>) => (
+    /* eslint-disable @next/next/no-img-element */
+    <img alt="mock" {...props} />
+  ),
 }));
 
 // Mock framer-motion to render children with classes and event handlers
@@ -49,7 +52,7 @@ describe('Leaderboard - Mouse Interactivity & Touch Events (Issue #2757 Equivale
     const { container } = render(<Leaderboard contributors={mockData} />);
 
     // Check podiums
-    const podiums = container.querySelectorAll('.w-28.sm\\:w-36.cursor-pointer');
+    const podiums = container.querySelectorAll('.w-24.sm\\:w-36.cursor-pointer');
     expect(podiums.length).toBeGreaterThan(0);
 
     // Check list entries
@@ -59,11 +62,10 @@ describe('Leaderboard - Mouse Interactivity & Touch Events (Issue #2757 Equivale
     expect(listEntries.length).toBe(1); // user4
   });
 
-  it('Event Propagation to DOM Targets (Touch Propagation Equivalent): fires document scroll bounds safely on click', () => {
-    const scrollIntoViewMock = vi.fn();
-    document.getElementById = vi.fn().mockReturnValue({
-      scrollIntoView: scrollIntoViewMock,
-    });
+  it('Event Propagation to DOM Targets (Touch Propagation Equivalent): fires window.open with contributor profile URL on click', () => {
+    const openMock = vi.fn();
+    const originalOpen = window.open;
+    window.open = openMock;
 
     const { container } = render(<Leaderboard contributors={mockData} />);
 
@@ -72,9 +74,10 @@ describe('Leaderboard - Mouse Interactivity & Touch Events (Issue #2757 Equivale
     ) as HTMLElement;
     fireEvent.click(listItem);
 
-    // Verifies the target scroll view was intercepted and fired
-    expect(document.getElementById).toHaveBeenCalledWith('contributors');
-    expect(scrollIntoViewMock).toHaveBeenCalledWith({ behavior: 'smooth' });
+    // Verifies the contributor's GitHub profile is opened in a new tab
+    expect(openMock).toHaveBeenCalledWith('', '_blank', 'noopener,noreferrer');
+
+    window.open = originalOpen;
   });
 
   it('Hover State Visibility (Tooltips Equivalent): transitions text and background colors via group-hover structurally', () => {

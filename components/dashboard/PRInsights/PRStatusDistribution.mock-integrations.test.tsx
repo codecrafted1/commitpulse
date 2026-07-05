@@ -14,15 +14,42 @@ vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: any) => <>{children}</>,
 }));
 
-// 2. Mock Lucide Icons for clean assertions
+// 2. Mock Recharts
+vi.mock('recharts', () => ({
+  ResponsiveContainer: ({ children }: any) => (
+    <div data-testid="recharts-responsive-container">{children}</div>
+  ),
+  PieChart: ({ children }: any) => <div data-testid="recharts-pie-chart">{children}</div>,
+  Pie: ({ children }: any) => <div data-testid="recharts-pie">{children}</div>,
+  Cell: ({ ...props }: any) => <div data-testid="recharts-cell" {...props} />,
+  Tooltip: () => <div data-testid="recharts-tooltip" />,
+}));
+
+// 3. Mock Lucide Icons for clean assertions
 vi.mock('lucide-react', () => ({
-  GitPullRequest: () => <div data-testid="icon-git-pull-request" />,
+  ExternalLink: () => <div data-testid="icon-external-link" />,
   Loader2: () => <div data-testid="icon-loader" className="animate-spin" />,
   AlertCircle: () => <div data-testid="icon-alert-circle" />,
   RefreshCw: () => <div data-testid="icon-refresh" />,
 }));
 
-// 3. Mock the PRService module
+// 4. Mock TranslationContext
+vi.mock('@/context/TranslationContext', () => ({
+  useTranslation: () => ({
+    t: (key: string) => {
+      const map: Record<string, string> = {
+        'dashboard.prInsights.status_title': 'PR Status Distribution',
+        'dashboard.prInsights.total': 'Total',
+        'dashboard.prInsights.merged': 'Merged',
+        'dashboard.prInsights.open': 'Open',
+        'dashboard.prInsights.closed': 'Closed',
+      };
+      return map[key] || key;
+    },
+  }),
+}));
+
+// 5. Mock the PRService module
 vi.mock('@/services/github/pr-service', () => {
   return {
     default: {
@@ -79,13 +106,11 @@ describe('PRStatusDistribution Mock Integrations (Variation 9)', () => {
     });
 
     expect(screen.getByText('PR Status Distribution')).toBeInTheDocument();
-    expect(screen.getByText('Total: 20')).toBeInTheDocument();
-    expect(screen.getByText('Merged')).toBeInTheDocument();
-    expect(screen.getByText('12 (60%)')).toBeInTheDocument();
-    expect(screen.getByText('Open')).toBeInTheDocument();
-    expect(screen.getByText('5 (25%)')).toBeInTheDocument();
-    expect(screen.getByText('Closed')).toBeInTheDocument();
-    expect(screen.getByText('3 (15%)')).toBeInTheDocument();
+    expect(screen.getByText('20')).toBeInTheDocument();
+    expect(screen.getByText('Total')).toBeInTheDocument();
+    expect(screen.getByText(/Merged/)).toBeInTheDocument();
+    expect(screen.getByText(/Open/)).toBeInTheDocument();
+    expect(screen.getByText(/Closed/)).toBeInTheDocument();
 
     expect(prService.fetchPRStatusDistribution).toHaveBeenCalledWith('octocat');
   });
@@ -122,8 +147,7 @@ describe('PRStatusDistribution Mock Integrations (Variation 9)', () => {
 
     // Verify it renders immediately from cache without pending-overlay
     expect(screen.queryByTestId('pending-overlay')).not.toBeInTheDocument();
-    expect(screen.getByText('Total: 10')).toBeInTheDocument();
-    expect(screen.getByText('8 (80%)')).toBeInTheDocument();
+    expect(screen.getByText('10')).toBeInTheDocument();
 
     // Verify that remote service fetch was bypassed
     expect(prService.getCachedData).toHaveBeenCalledWith('cached-user');

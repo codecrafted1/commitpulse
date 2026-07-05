@@ -6,7 +6,10 @@ import Leaderboard from './Leaderboard';
 import '@testing-library/jest-dom';
 
 vi.mock('next/image', () => ({
-  default: (props: ImgHTMLAttributes<HTMLImageElement>) => <img alt="" {...props} />,
+  default: ({ ...props }: ImgHTMLAttributes<HTMLImageElement>) => (
+    /* eslint-disable @next/next/no-img-element */
+    <img alt="" {...props} />
+  ),
 }));
 
 class MockIntersectionObserver {

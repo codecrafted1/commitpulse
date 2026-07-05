@@ -1,6 +1,13 @@
+import 'server-only';
 import type { ParsedResume, Education, Experience } from '@/types/student';
 
-const EMAIL_REGEX = /[\w.-]+@[\w.-]+\.\w+/;
+// Polyfill DOMMatrix for server-side/test environments to prevent pdfjs-dist crash
+if (typeof globalThis !== 'undefined' && !('DOMMatrix' in globalThis)) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).DOMMatrix = class DOMMatrix {};
+}
+
+const EMAIL_REGEX = /[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}/i;
 const NAME_LINE_REGEX = /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/;
 
 const SKILL_SECTION_HEADERS = /skills|technologies|proficiencies|tech stack|tools/i;
@@ -9,7 +16,7 @@ const EXPERIENCE_SECTION_HEADERS = /experience|work|employment|professional|care
 
 function extractEmail(text: string): string {
   const match = text.match(EMAIL_REGEX);
-  return match ? match[0] : '';
+  return match ? match[0] : 'N/A';
 }
 
 function extractName(text: string): string {
@@ -23,7 +30,7 @@ function extractName(text: string): string {
       return match[1];
     }
   }
-  return '';
+  return 'N/A';
 }
 
 function extractSection(text: string, headers: RegExp): string[] {
@@ -54,13 +61,30 @@ function extractSection(text: string, headers: RegExp): string[] {
   return sectionLines;
 }
 
+function isValidSkill(skill: string): boolean {
+  const cleaned = skill.trim();
+
+  const shortSkills = new Set(['C', 'R', 'Go', 'AI', 'ML', 'JS', 'TS', 'C++', 'C#', '.NET']);
+
+  if (shortSkills.has(cleaned)) {
+    return true;
+  }
+
+  return (
+    cleaned.length >= 2 &&
+    cleaned.length < 50 &&
+    /^[a-zA-Z0-9.+#\s-]+$/.test(cleaned) &&
+    !/[?~<>]/.test(cleaned) &&
+    !/^[A-Za-z]\s+[A-Za-z]$/.test(cleaned)
+  );
+}
+
 function extractSkills(text: string): string[] {
   const section = extractSection(text, SKILL_SECTION_HEADERS);
-  const allText = section.join(' ');
-  const skills = allText
-    .split(/[,•·\-|/\n]+/)
+  const skills = section
+    .flatMap((line) => line.split(/[,•·|/]+/))
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && s.length < 50);
+    .filter(isValidSkill);
   return [...new Set(skills)];
 }
 
@@ -108,10 +132,48 @@ function extractExperience(text: string): Experience[] {
   return experience;
 }
 
-function extractTextFromBuffer(buffer: Buffer, _mimeType: string): string {
-  void _mimeType;
-  const text = buffer.toString('utf-8');
-  const printable = text
+async function extractTextFromBuffer(buffer: Buffer, mimeType: string): Promise<string> {
+  let rawText = '';
+
+  if (mimeType === 'application/pdf') {
+    try {
+      if (buffer.toString('utf-8', 0, 4) === '%PDF') {
+        const { PDFParse } = await import('pdf-parse');
+
+        const parser = new PDFParse({ data: buffer });
+        const result = await parser.getText();
+        await parser.destroy();
+
+        rawText = result.text;
+      } else {
+        rawText = buffer.toString('utf-8');
+      }
+    } catch (error) {
+      console.warn('Failed to parse PDF using pdf-parse, falling back to UTF-8 decoding:', error);
+      rawText = buffer.toString('utf-8');
+    }
+  } else if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    try {
+      if (buffer.toString('utf-8', 0, 2) === 'PK') {
+        const mammothModule = await import('mammoth');
+        const mammothParser = ((mammothModule as unknown as { default?: unknown }).default ||
+          mammothModule) as typeof mammothModule;
+        const result = await mammothParser.extractRawText({ buffer });
+        rawText = result.value;
+      } else {
+        rawText = buffer.toString('utf-8');
+      }
+    } catch (error) {
+      console.warn('Failed to parse DOCX using mammoth, falling back to UTF-8 decoding:', error);
+      rawText = buffer.toString('utf-8');
+    }
+  } else {
+    rawText = buffer.toString('utf-8');
+  }
+
+  const printable = rawText
     .replace(/[^\x20-\x7E\n\r]/g, ' ')
     .replace(/[ \t]+/g, ' ')
     .replace(/\r/g, '')
@@ -132,27 +194,52 @@ function extractTextFromBuffer(buffer: Buffer, _mimeType: string): string {
  * const phone = extractPhone(rawText);
  */
 function extractPhone(text: string): string {
-  const match = text.match(/(\+?\d{1,3}[\s.-]?)?(\(?\d{3}\)?[\s.-]?)(\d{3}[\s.-]?\d{4})/);
-  return match ? match[0].trim() : '';
+  const match = text.match(/(?:\+?\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{2,4}[\s.-]?\d{3,9}/);
+  return match ? match[0].trim() : 'N/A';
 }
 
 export async function parseResume(buffer: Buffer, mimeType: string): Promise<ParsedResume> {
-  const rawText = extractTextFromBuffer(buffer, mimeType);
+  if (!buffer) {
+    throw new TypeError('Buffer cannot be null or undefined');
+  }
+  const rawText = await extractTextFromBuffer(buffer, mimeType);
+
+  const name = extractName(rawText);
+  const email = extractEmail(rawText);
+  const phone = extractPhone(rawText);
+  const skills = extractSkills(rawText);
+  const education = extractEducation(rawText);
+  const experience = extractExperience(rawText);
 
   return {
-    name: extractName(rawText),
-    email: extractEmail(rawText),
-    phone: extractPhone(rawText),
-    skills: extractSkills(rawText),
-    education: extractEducation(rawText),
-    experience: extractExperience(rawText),
+    name: name && name.trim() ? name.trim() : 'N/A',
+    email: email && email.trim() ? email.trim() : 'N/A',
+    phone: phone && phone.trim() ? phone.trim() : 'N/A',
+    skills: Array.isArray(skills) ? skills.filter(Boolean) : [],
+    education: Array.isArray(education)
+      ? education.map((edu) => ({
+          institution: edu.institution?.trim() || 'N/A',
+          degree: edu.degree?.trim() || 'N/A',
+          field: edu.field?.trim() || 'N/A',
+          startDate: edu.startDate?.trim() || 'N/A',
+          endDate: edu.endDate?.trim() || 'N/A',
+        }))
+      : [],
+    experience: Array.isArray(experience)
+      ? experience.map((exp) => ({
+          company: exp.company?.trim() || 'N/A',
+          role: exp.role?.trim() || 'N/A',
+          startDate: exp.startDate?.trim() || 'N/A',
+          endDate: exp.endDate?.trim() || 'N/A',
+          description: exp.description?.trim() || 'N/A',
+        }))
+      : [],
   };
 }
 
 export const ALLOWED_MIME_TYPES = [
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/msword',
 ];
 
 export const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -165,7 +252,6 @@ const FILE_SIGNATURES: Record<string, number[][]> = {
     [0x50, 0x4b, 0x05, 0x06],
     [0x50, 0x4b, 0x07, 0x08],
   ],
-  'application/msword': [[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]],
 };
 
 export function hasValidFileSignature(buffer: Buffer, mimeType: string): boolean {
