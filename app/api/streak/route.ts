@@ -34,6 +34,7 @@ import { generateConstellationSVG } from '@/lib/svg/constellation';
 import { generateRadarSVG } from '@/lib/svg/radar';
 import { generateDoughnutSVG } from '@/lib/svg/doughnut';
 import { generateCommitClockSVG } from '@/lib/svg/commitClock';
+import { generateWeekdaySVG } from '@/lib/svg/weekday';
 import { optimizeSVG } from '@/lib/svg/optimizer';
 import { getSecondsUntilUTCMidnight, getSecondsUntilMidnightInTimezone } from '@/utils/time';
 import type { BadgeParams, RepoContribution, ExtendedContributionData } from '@/types';
@@ -175,7 +176,8 @@ export async function GET(request: Request) {
       | 'doughnut'
       | 'pie'
       | 'activity_graph'
-      | 'commit_clock';
+      | 'commit_clock'
+      | 'weekday';
     const themeKey = getNormalizedThemeKey(theme);
     const themeName = themeKey === 'default' && theme ? theme : themeKey;
 
@@ -610,6 +612,11 @@ export async function GET(request: Request) {
       const stats = calculateStreak(calendar, timezone, undefined, grace);
       const hourCounts = await fetchCommitHourDistribution(user).catch(() => new Array(24).fill(0));
       svg = generateCommitClockSVG(hourCounts, stats, params);
+    } else if (normalizedView === 'weekday') {
+      // ← INSERT YOUR NEW BLOCK HERE
+      const normalizedCalendar = normalizeCalendarToTimezone(calendar, timezone);
+      const stats = calculateStreak(normalizedCalendar, timezone, undefined, grace);
+      svg = generateWeekdaySVG(stats, params, normalizedCalendar);
     } else if (versus && versusCalendar) {
       // Normalize both calendars to the target timezone for accurate comparison
       const normalizedCalendar = normalizeCalendarToTimezone(calendar, timezone);
