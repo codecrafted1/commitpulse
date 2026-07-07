@@ -14,13 +14,15 @@ const defaultProps = {
 };
 
 // --- Mocks ---
+const { shouldThrow } = vi.hoisted(() => ({ shouldThrow: { value: false } }));
+
 // We mock the child SectionCard to trigger a runtime error in one of the tests
 vi.mock('../SectionCard', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../SectionCard')>();
   return {
     ...actual,
     SectionCard: (props: React.ComponentProps<typeof actual.SectionCard>) => {
-      if (props.title === 'THROW_RUNTIME_ERROR') {
+      if (shouldThrow.value) {
         throw new Error('Nested Runtime Exception');
       }
       return <actual.SectionCard {...props} />;
@@ -69,6 +71,7 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    shouldThrow.value = false;
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
       Promise.resolve({
@@ -94,9 +97,10 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
   });
 
   it('2. Runtime Exception Safety: catches nested exceptions and shows fallback UI', () => {
+    shouldThrow.value = true;
     render(
       <TestErrorBoundary fallback={<div data-testid="runtime-error">Fallback UI</div>}>
-        <CommitPulseSection {...defaultProps} title="THROW_RUNTIME_ERROR" />
+        <CommitPulseSection {...defaultProps} />
       </TestErrorBoundary>
     );
 
@@ -126,9 +130,10 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
   });
 
   it('4. Telemetry / Logger Verification: logs the exact exception once with expected arguments', () => {
+    shouldThrow.value = true;
     render(
       <TestErrorBoundary fallback={<div />}>
-        <CommitPulseSection {...defaultProps} title="THROW_RUNTIME_ERROR" />
+        <CommitPulseSection {...defaultProps} />
       </TestErrorBoundary>
     );
 
@@ -136,8 +141,8 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
     expect(consoleErrorSpy).toHaveBeenCalled();
 
     // Verify logger was invoked exactly once for the ErrorBoundary catch
-    const loggedError = consoleErrorSpy.mock.calls.find((call) =>
-      call.includes('ErrorBoundary caught:')
+    const loggedError = consoleErrorSpy.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('ErrorBoundary caught:')
     );
     expect(loggedError).toBeTruthy();
     expect(loggedError?.[1]).toBe('Nested Runtime Exception');
@@ -145,10 +150,11 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
 
   it('5. Recovery UI: attempts recovery properly upon user interaction', () => {
     const mockRecoverFn = vi.fn();
+    shouldThrow.value = true;
 
     const { rerender } = render(
       <TestErrorBoundary fallback={<div>Oops! Something failed.</div>} onRecover={mockRecoverFn}>
-        <CommitPulseSection {...defaultProps} title="THROW_RUNTIME_ERROR" />
+        <CommitPulseSection {...defaultProps} />
       </TestErrorBoundary>
     );
 
@@ -156,6 +162,7 @@ describe('CommitPulseSection - Error Resilience (Variation 6)', () => {
     expect(screen.getByText('Oops! Something failed.')).toBeInTheDocument();
 
     // Simulate fixing the root cause for the next render
+    shouldThrow.value = false;
     rerender(
       <TestErrorBoundary fallback={<div>Oops! Something failed.</div>} onRecover={mockRecoverFn}>
         <CommitPulseSection {...defaultProps} />
