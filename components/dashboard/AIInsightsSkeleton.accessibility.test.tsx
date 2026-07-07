@@ -14,13 +14,13 @@ describe('AIInsightsSkeleton Accessibility', () => {
     const wrapper = container.firstChild as HTMLElement;
     expect(wrapper).toHaveAttribute('role', 'status');
     expect(wrapper).toHaveAttribute('aria-busy', 'true');
+    expect(wrapper).toHaveAttribute('aria-live', 'polite');
 
     // Ensure the inner divs do not carry inappropriate roles.
     const innerDivs = Array.from(container.querySelectorAll('div')).slice(1);
     innerDivs.forEach((div) => {
       expect(div.getAttribute('role')).toBeNull();
     });
-
     // Verify that conflicting labeling attributes are avoided since aria-label is present.
     expect(wrapper).not.toHaveAttribute('aria-labelledby');
     expect(wrapper).not.toHaveAttribute('aria-describedby');
