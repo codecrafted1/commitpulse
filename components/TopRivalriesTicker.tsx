@@ -14,7 +14,15 @@ const MOCK_RIVALRIES = [
   },
   { u1: 'rich-harris', u2: 'antfu', label: 'Svelte vs Nuxt', icon: Zap, color: 'text-yellow-400' },
   { u1: 'shadcn', u2: 'pacocoursey', label: 'UI Masters', icon: Target, color: 'text-indigo-400' },
-  { u1: 'vercel', u2: 'netlify', label: 'Platform Wars', icon: Trophy, color: 'text-emerald-500' },
+  {
+    u1: 'rauchg',
+    u2: 'biilmann',
+    displayU1: 'Vercel',
+    displayU2: 'Netlify',
+    label: 'Platform Wars',
+    icon: Trophy,
+    color: 'text-emerald-500',
+  },
   { u1: 'dhh', u2: 'taylorotwell', label: 'Ruby vs PHP', icon: Star, color: 'text-rose-500' },
   {
     u1: 'jhasourav07',
@@ -28,6 +36,8 @@ const MOCK_RIVALRIES = [
 export interface RivalryItem {
   u1: string;
   u2: string;
+  displayU1?: string;
+  displayU2?: string;
   label: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   color: string;
@@ -85,13 +95,13 @@ export default function TopRivalriesTicker({
                 />
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-black dark:group-hover:text-white transition-colors">
-                    {rivalry.u1}
+                    {rivalry.displayU1 ?? rivalry.u1}
                   </span>
                   <span className="text-[10px] font-black text-zinc-400 dark:text-zinc-600 tracking-widest uppercase">
                     VS
                   </span>
                   <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 group-hover:text-black dark:group-hover:text-white transition-colors">
-                    {rivalry.u2}
+                    {rivalry.displayU2 ?? rivalry.u2}
                   </span>
                 </div>
                 <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-medium px-2 py-0.5 rounded-md border border-black/5 dark:border-white/10 bg-white dark:bg-black/20">
