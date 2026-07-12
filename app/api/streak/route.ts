@@ -169,6 +169,7 @@ export async function GET(request: Request) {
       phi,
       border,
       minify,
+      hide_weekend,
     } = parseResult.data;
     const normalizedView = view as
       | 'default'
@@ -406,6 +407,7 @@ export async function GET(request: Request) {
       theta,
       phi,
       compact,
+      hide_weekend,
     };
 
     let calendar;
