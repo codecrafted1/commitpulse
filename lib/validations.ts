@@ -583,6 +583,7 @@ const baseStreakParamsSchema = z.object({
     .catch('rise')
     .default('rise'),
   badges: z.string().optional().transform(toBooleanFlag).default(false),
+  hide_weekend: z.string().optional().transform(toBooleanFlag).default(false),
 
   // Output format: 'svg' (default), 'json', or 'png' for image export.
   // Invalid values silently fall back to 'svg'.
