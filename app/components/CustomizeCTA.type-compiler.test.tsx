@@ -3,6 +3,7 @@
 import { describe, expect, it, expectTypeOf } from 'vitest';
 import type { ReactElement } from 'react';
 import { CustomizeCTA } from './CustomizeCTA';
+import react from 'react';
 
 describe('CustomizeCTA TypeScript Compiler Validation', () => {
   it('exports a function component', () => {
