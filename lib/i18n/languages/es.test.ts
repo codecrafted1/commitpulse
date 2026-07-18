@@ -29,4 +29,10 @@ describe('Spanish language translations', () => {
     expect(es.COMMITS_THIS_MONTH).toBe('Commits Este Mes');
     expect(es.VS_LAST_MONTH).toBe('vs mes anterior');
   });
+
+
+  it('is case-insensitively resolved by getLabels', () => {
+    expect(getLabels('ES')).toEqual(labels.es);
+    expect(getLabels('Es')).toEqual(labels.es);
+  });
 });

@@ -29,4 +29,9 @@ describe('Tamil language translations', () => {
     expect(ta.COMMITS_THIS_MONTH).toBe('இம்மாத கமிட்கள்');
     expect(ta.VS_LAST_MONTH).toBe('கடந்த மாதத்துடன்');
   });
+
+  it('is case-insensitively resolved by getLabels', () => {
+    expect(getLabels('TA')).toEqual(labels.ta);
+    expect(getLabels('Ta')).toEqual(labels.ta);
+  });
 });
