@@ -36,3 +36,7 @@ describe('Spanish language translations', () => {
     expect(getLabels('Es')).toEqual(labels.es);
   });
 });
+it('is case-insensitively resolved by getLabels', () => {
+  expect(getLabels('ES')).toEqual(labels.es);
+  expect(getLabels('Es')).toEqual(labels.es);
+});

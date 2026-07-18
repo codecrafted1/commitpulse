@@ -35,3 +35,7 @@ describe('Tamil language translations', () => {
     expect(getLabels('Ta')).toEqual(labels.ta);
   });
 });
+it('is case-insensitively resolved by getLabels', () => {
+  expect(getLabels('TA')).toEqual(labels.ta);
+  expect(getLabels('Ta')).toEqual(labels.ta);
+});
