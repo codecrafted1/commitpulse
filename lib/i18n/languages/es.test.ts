@@ -23,10 +23,10 @@ describe('Spanish language translations', () => {
   it('matches the expected Spanish translations', () => {
     const es = labels.es;
 
-    expect(es.CURRENT_STREAK).toBe('RACHA_ACTUAL');
-    expect(es.ANNUAL_SYNC_TOTAL).toBe('TOTAL_ANUAL');
-    expect(es.PEAK_STREAK).toBe('RACHA_MÁXIMA');
-    expect(es.COMMITS_THIS_MONTH).toBe('COMMITS ESTE MES');
+    expect(es.CURRENT_STREAK).toBe('Racha Actual');
+    expect(es.ANNUAL_SYNC_TOTAL).toBe('Total Anual');
+    expect(es.PEAK_STREAK).toBe('Racha Máxima');
+    expect(es.COMMITS_THIS_MONTH).toBe('Commits Este Mes');
     expect(es.VS_LAST_MONTH).toBe('vs mes anterior');
   });
 });

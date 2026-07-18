@@ -89,9 +89,8 @@ describe('ApiStreakRoute Timezone Normalization & Calendar Boundary Alignment', 
     expect(getSecondsUntilMidnightInTimezone).toHaveBeenCalled();
     expect(getSecondsUntilUTCMidnight).not.toHaveBeenCalled();
 
-    expect(response.headers.get('Cache-Control')).toContain('s-maxage=1');
+    expect(response.headers.get('Cache-Control')).toContain('s-maxage=7200');
   });
-
   it('returns 400 for an invalid timezone and skips GitHub fetching', async () => {
     const response = await GET(
       makeRequest({
@@ -123,8 +122,9 @@ describe('ApiStreakRoute Timezone Normalization & Calendar Boundary Alignment', 
 
     expect(response.status).toBe(200);
 
-    expect(response.headers.get('Cache-Control')).toContain('s-maxage=1');
+    vi.mocked(getSecondsUntilMidnightInTimezone).mockReturnValue(1234);
 
+    expect(response.headers.get('Cache-Control')).toContain('s-maxage=1234');
     const body = await response.json();
 
     expect(body.user).toBe('octocat');
