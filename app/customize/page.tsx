@@ -26,8 +26,9 @@ import type {
 
 import { useDebounce } from '@/hooks/useDebounce';
 import useFetchCache from '@/hooks/useFetchCache';
-import { getExportSnippet, buildQueryParams, streakErrorMessage } from './utils';
+import { getExportSnippet, buildQueryParams, streakErrorMessage, exportConfig } from './utils';
 import { useTranslation } from '@/context/TranslationContext';
+import type { CustomizeOptions } from './types';
 
 function readNumericSearchParam(
   searchParams: URLSearchParams,
@@ -687,6 +688,62 @@ function CustomizePageInner(): ReactElement {
               username={trimmedUsername}
               onFormatChange={setExportFormat}
               onCopy={copyExportSnippet}
+              onExportConfig={() => {
+                exportConfig({
+                  username,
+                  theme,
+                  bgHex,
+                  bgType,
+                  bgStart,
+                  bgEnd,
+                  bgAngle,
+                  accentHex,
+                  textHex,
+                  scale,
+                  speed,
+                  font,
+                  year,
+                  radius,
+                  size,
+                  hideTitle,
+                  hideBackground,
+                  hideStats,
+                  viewMode,
+                  deltaFormat,
+                  badgeWidth,
+                  badgeHeight,
+                  grace,
+                  language,
+                  timezone,
+                });
+              }}
+              onImportConfig={(opts: CustomizeOptions) => {
+                setUsername(opts.username);
+                handleThemeChange(opts.theme);
+                setBgHex(opts.bgHex);
+                setBgType(opts.bgType);
+                setBgStart(opts.bgStart);
+                setBgEnd(opts.bgEnd);
+                setBgAngle(opts.bgAngle);
+                setAccentHex(opts.accentHex);
+                setTextHex(opts.textHex);
+                setScale(opts.scale);
+                setSpeed(opts.speed);
+                setFont(opts.font);
+                setYear(opts.year);
+                setRadius(opts.radius);
+                setSize(opts.size);
+                setHideTitle(opts.hideTitle);
+                setHideBackground(opts.hideBackground);
+                setHideStats(opts.hideStats);
+                setViewMode(opts.viewMode);
+                setDeltaFormat(opts.deltaFormat);
+                setBadgeWidth(opts.badgeWidth);
+                setBadgeHeight(opts.badgeHeight);
+                setGrace(opts.grace);
+                setLanguage(opts.language);
+                setTimezone(opts.timezone);
+              }}
             />
 
             {/* URL breakdown */}
